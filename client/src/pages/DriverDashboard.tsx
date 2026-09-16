@@ -9,10 +9,14 @@ import {
   Wallet,
 } from "lucide-react";
 import { useState } from "react";
+import { currentRide, updateRideStatus } from "../rideStore";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [rideAccepted, setRideAccepted] = useState(false);
+  const [rideStarted, setRideStarted] = useState(false);
+  const [rideCompleted, setRideCompleted] = useState(false);
+  const [completedRide, setCompletedRide] = useState(currentRide);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -142,10 +146,9 @@ export default function DriverDashboard() {
 
             </div>
 
-            {isOnline ? (
-  rideAccepted ? (
+              {isOnline ? (
+  rideCompleted ? (
     <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-6">
-
       <div className="flex items-start gap-4">
 
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-green-600 shadow-sm">
@@ -153,24 +156,13 @@ export default function DriverDashboard() {
         </div>
 
         <div className="flex-1">
+          <p className="font-semibold text-green-800">
+            Ride Completed
+          </p>
 
-          <div className="flex items-start justify-between">
-
-            <div>
-              <p className="font-semibold text-green-800">
-                Ride Accepted
-              </p>
-
-              <p className="mt-1 text-sm text-slate-500">
-                You are assigned to this passenger.
-              </p>
-            </div>
-
-            <p className="text-lg font-bold">
-              ₹145
-            </p>
-
-          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            The ride has been completed successfully.
+          </p>
 
           <div className="mt-5 space-y-3">
 
@@ -179,7 +171,7 @@ export default function DriverDashboard() {
                 size={17}
                 className="text-green-600"
               />
-              KSR Railway Station
+              {completedRide?.pickup}
             </div>
 
             <div className="flex items-center gap-2 text-sm">
@@ -187,91 +179,228 @@ export default function DriverDashboard() {
                 size={17}
                 className="text-red-500"
               />
-              Koramangala
+              {completedRide?.destination}
             </div>
 
           </div>
 
-          <button className="mt-5 w-full rounded-lg bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700">
-            Start Ride
-          </button>
+          <p className="mt-5 text-lg font-bold">
+            Fare: ₹{completedRide?.fare}
+          </p>
 
         </div>
-
       </div>
-
     </div>
-  ) : (
-    <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50 p-5">
 
-      <div className="flex items-start gap-4">
+  ) : rideStarted ? (
+                // =========================
+                // RIDE IN PROGRESS
+                // =========================
+                <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-6">
+                  <div className="flex items-start gap-4">
 
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm">
-          <MapPin size={22} />
-        </div>
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
+                      <MapPin size={22} />
+                    </div>
 
-        <div className="flex-1">
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="font-semibold text-blue-800">
+                            Ride In Progress
+                          </p>
 
-          <div className="flex items-start justify-between">
+                          <p className="mt-1 text-sm text-slate-500">
+                            You are currently driving the passenger.
+                          </p>
+                        </div>
 
-            <div>
-              <p className="font-semibold">
-                New Ride Request
-              </p>
+                        <p className="text-lg font-bold">
+                          ₹{currentRide?.fare}
+                        </p>
+                      </div>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Passenger nearby
-              </p>
-            </div>
+                      <div className="mt-5 space-y-3">
 
-            <p className="text-lg font-bold">
-              ₹145
-            </p>
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={17}
+                            className="text-green-600"
+                          />
+                          {currentRide?.pickup}
+                        </div>
 
-          </div>
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={17}
+                            className="text-red-500"
+                          />
+                          {currentRide?.destination}
+                        </div>
 
-          <div className="mt-4 space-y-2">
+                      </div>
 
-            <div className="flex items-center gap-2 text-sm">
-              <MapPin
-                size={16}
-                className="text-green-600"
-              />
-              KSR Railway Station
-            </div>
+                      <button
+                        onClick={() => {
+                          setCompletedRide(currentRide);
+                          updateRideStatus("COMPLETED");
+                          setRideStarted(false);
+                          setRideAccepted(false);
+                          setRideCompleted(true);
+                        }}
+                        className="mt-5 w-full rounded-lg bg-green-600 py-3 font-semibold text-white hover:bg-green-700"
+                      >
+                        Complete Ride
+                      </button>
 
-            <div className="flex items-center gap-2 text-sm">
-              <MapPin
-                size={16}
-                className="text-red-500"
-              />
-              Koramangala
-            </div>
+                    </div>
+                  </div>
+                </div>
 
-          </div>
+              ) : rideAccepted ? (
 
-          <div className="mt-4 flex gap-3">
+                // =========================
+                // RIDE ACCEPTED
+                // =========================
+                <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-6">
+                  <div className="flex items-start gap-4">
 
-            <button
-              onClick={() => setRideAccepted(true)}
-              className="flex-1 rounded-lg bg-green-600 py-3 font-semibold text-white hover:bg-green-700"
-            >
-              Accept Ride
-            </button>
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-green-600 shadow-sm">
+                      <CheckCircle size={22} />
+                    </div>
 
-            <button className="rounded-lg border border-slate-300 px-5 py-3 font-medium hover:bg-white">
-              Decline
-            </button>
+                    <div className="flex-1">
 
-          </div>
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="font-semibold text-green-800">
+                            Ride Accepted
+                          </p>
 
-        </div>
+                          <p className="mt-1 text-sm text-slate-500">
+                            You can now start the ride.
+                          </p>
+                        </div>
 
-      </div>
+                        <p className="text-lg font-bold">
+                          ₹{currentRide?.fare}
+                        </p>
+                      </div>
 
-    </div>
-  )
+                      <div className="mt-5 space-y-3">
+
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={17}
+                            className="text-green-600"
+                          />
+                          {currentRide?.pickup}
+                        </div>
+
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={17}
+                            className="text-red-500"
+                          />
+                          {currentRide?.destination}
+                        </div>
+
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          updateRideStatus("STARTED");
+                          setRideStarted(true);
+                        }}
+                        className="mt-5 w-full rounded-lg bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700"
+                      >
+                        Start Ride
+                      </button>
+
+                    </div>
+                  </div>
+                </div>
+
+              ) : (
+
+                // =========================
+                // NEW RIDE REQUEST
+                // =========================
+                <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50 p-5">
+                  <div className="flex items-start gap-4">
+
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm">
+                      <MapPin size={22} />
+                    </div>
+
+                    <div className="flex-1">
+
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="font-semibold">
+                            New Ride Request
+                          </p>
+
+                          <p className="mt-1 text-sm text-slate-500">
+                            Passenger nearby
+                          </p>
+                        </div>
+
+                        <p className="text-lg font-bold">
+                          ₹{currentRide?.fare}
+                        </p>
+                      </div>
+
+                      <div className="mt-4 space-y-2">
+
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={16}
+                            className="text-green-600"
+                          />
+                          {currentRide?.pickup}
+                        </div>
+
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin
+                            size={16}
+                            className="text-red-500"
+                          />
+                          {currentRide?.destination}
+                        </div>
+
+                      </div>
+
+                      <div className="mt-4 flex gap-3">
+
+                        <button
+                          onClick={() => {
+                            updateRideStatus("ACCEPTED");
+                            setRideAccepted(true);
+                          }}
+                          className="flex-1 rounded-lg bg-green-600 py-3 font-semibold text-white hover:bg-green-700"
+                        >
+                          Accept Ride
+                        </button>
+
+                        <button
+                          className="rounded-lg border border-slate-300 px-5 py-3 font-medium hover:bg-white"
+                        >
+                          Decline
+                        </button>
+
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+              )
+
             ) : (
+
+              // =========================
+              // OFFLINE
+              // =========================
               <div className="mt-6 rounded-xl border border-dashed p-10 text-center">
 
                 <Power
@@ -289,9 +418,7 @@ export default function DriverDashboard() {
 
               </div>
             )}
-
-          </div>
-
+            </div>
           {/* Vehicle */}
           <div className="rounded-2xl border bg-white p-6 shadow-sm">
 

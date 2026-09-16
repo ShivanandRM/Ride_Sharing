@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createRide, currentRide } from "../rideStore";
+import RideMap from "../components/RideMap";
 import {
   MapPin,
   Search,
@@ -14,20 +16,60 @@ import {
 type VehicleType = "BIKE" | "AUTO" | "CAB" | "PREMIUM_CAB";
 
 function HomePage() {
+  const [distance, setDistance] = useState(0);
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
   const [showVehicles, setShowVehicles] = useState(false);
   const [selectedVehicle, setSelectedVehicle] =
     useState<VehicleType>("CAB");
+  const [rideRequested, setRideRequested] = useState(
+  localStorage.getItem("rideflow_current_ride") !== null
+  );
+  const [rideStatus, setRideStatus] = useState("REQUESTED");
+
+  useEffect(() => {
+  const checkRideStatus = () => {
+    const savedRide = localStorage.getItem("rideflow_current_ride");
+
+    if (savedRide) {
+      const ride = JSON.parse(savedRide);
+
+      setRideRequested(true);
+      setRideStatus(ride.status);
+    }
+  };
+
+  checkRideStatus();
+
+  const interval = setInterval(checkRideStatus, 1000);
+
+  return () => clearInterval(interval);
+}, []);
 
   const handleBookRide = () => {
-    if (!pickup || !destination) {
-      alert("Please enter pickup and destination.");
-      return;
-    }
+  if (!pickup || !destination) {
+    alert("Please enter pickup and destination.");
+    return;
+  }
 
-    setShowVehicles(true);
-  };
+  // Clear previous ride
+  localStorage.removeItem("rideflow_current_ride");
+
+  setRideRequested(false);
+  setRideStatus("REQUESTED");
+  setShowVehicles(true);
+};
+  const calculateFare = (vehicle: VehicleType) => {
+  return Math.round(
+    vehicle === "BIKE"
+      ? 30 + distance * 8
+      : vehicle === "AUTO"
+      ? 40 + distance * 12
+      : vehicle === "CAB"
+      ? 60 + distance * 15
+      : 100 + distance * 20
+  );
+};
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -165,7 +207,7 @@ function HomePage() {
             </div>
 
             {/* Vehicle Selection */}
-            {showVehicles && (
+            {showVehicles && !rideRequested && (
               <div className="mt-6 rounded-2xl border bg-white p-5 shadow-lg">
 
                 <h3 className="mb-4 text-lg font-semibold">
@@ -178,7 +220,7 @@ function HomePage() {
                     type="BIKE"
                     name="Bike"
                     description="Affordable & quick"
-                    price="₹65"
+                    price={`₹${calculateFare("BIKE")}`}
                     icon={<Bike size={24} />}
                     selected={selectedVehicle === "BIKE"}
                     onClick={() =>
@@ -190,7 +232,7 @@ function HomePage() {
                     type="AUTO"
                     name="Auto"
                     description="Comfortable everyday ride"
-                    price="₹95"
+                    price={`₹${calculateFare("AUTO")}`}
                     icon={<Car size={24} />}
                     selected={selectedVehicle === "AUTO"}
                     onClick={() =>
@@ -202,7 +244,7 @@ function HomePage() {
                     type="CAB"
                     name="Cab"
                     description="Comfortable private ride"
-                    price="₹145"
+                    price={`₹${calculateFare("CAB")}`}
                     icon={<Car size={24} />}
                     selected={selectedVehicle === "CAB"}
                     onClick={() =>
@@ -214,7 +256,7 @@ function HomePage() {
                     type="PREMIUM_CAB"
                     name="Premium Cab"
                     description="Premium comfort"
-                    price="₹220"
+                    price={`₹${calculateFare("PREMIUM_CAB")}`}
                     icon={<Car size={24} />}
                     selected={
                       selectedVehicle === "PREMIUM_CAB"
@@ -225,6 +267,41 @@ function HomePage() {
                   />
 
                 </div>
+                {distance > 0 && (
+  <div className="mt-4 rounded-2xl border bg-white p-5 shadow-sm">
+    <h3 className="text-lg font-semibold text-slate-800">
+      Selected Ride
+    </h3>
+
+    <div className="mt-3 flex justify-between">
+      <span className="text-slate-500">Vehicle</span>
+      <span className="font-semibold">{selectedVehicle}</span>
+    </div>
+
+    <div className="mt-2 flex justify-between">
+      <span className="text-slate-500">Distance</span>
+      <span className="font-semibold">
+        {distance.toFixed(1)} km
+      </span>
+    </div>
+
+    <div className="mt-2 flex justify-between">
+      <span className="text-slate-500">Estimated Fare</span>
+      <span className="font-semibold text-indigo-600">
+        ₹
+        {Math.round(
+          selectedVehicle === "BIKE"
+            ? 30 + distance * 8
+            : selectedVehicle === "AUTO"
+            ? 40 + distance * 12
+            : selectedVehicle === "CAB"
+            ? 60 + distance * 15
+            : 100 + distance * 20
+        )}
+      </span>
+    </div>
+  </div>
+)}
 
                 {/* Trip Summary */}
                 <div className="mt-5 rounded-xl bg-slate-50 p-4">
@@ -268,53 +345,124 @@ function HomePage() {
                 </div>
 
                 <button
-                  onClick={() =>
-                    alert(
-                      `Ride requested with ${selectedVehicle}`
-                    )
-                  }
+                  onClick={() => {
+                  createRide({
+                  pickup: pickup,
+                  destination: destination,
+                  vehicle: selectedVehicle,
+                  fare: Math.round(
+                    selectedVehicle === "BIKE"
+                    ? 30 + distance * 8
+                    : selectedVehicle === "AUTO"
+                    ? 40 + distance * 12
+                    : selectedVehicle === "CAB"
+                    ? 60 + distance * 15
+                    : 100 + distance * 20
+                    ),
+                    
+                  status: "REQUESTED",
+                });
+
+                setRideRequested(true);
+                alert("Ride request created successfully!");
+              }}
                   className="mt-5 w-full rounded-xl bg-green-600 py-4 font-semibold text-white hover:bg-green-700"
                 >
                   Confirm Ride
                 </button>
 
-              </div>
-            )}
+          </div>
+          )}
+          {rideRequested && (
+  <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-6 shadow-lg">
+    <div className="flex items-center gap-4">
 
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600">
+        <MapPin size={24} />
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-green-800">
+        {rideStatus === "REQUESTED" && "Ride Requested"}
+        {rideStatus === "ACCEPTED" && "Driver Accepted Your Ride"}
+        {rideStatus === "STARTED" && "Ride In Progress"}
+        {rideStatus === "COMPLETED" && "Ride Completed"}
+      </h3>
+
+      <p className="mt-1 text-sm text-slate-600">
+        {rideStatus === "REQUESTED" &&
+          "Searching for a nearby driver..."}
+        {rideStatus === "ACCEPTED" &&
+          "Your driver has accepted the ride."}
+        {rideStatus === "STARTED" &&
+          "Your ride is currently in progress."}
+        {rideStatus === "COMPLETED" &&
+          "Your ride has been completed successfully."}
+      </p>
+      </div>
+
+    </div>
+
+    <div className="mt-5 rounded-xl bg-white p-4">
+      <div className="flex justify-between text-sm">
+        <span className="text-slate-500">Pickup</span>
+        <span className="font-medium">{currentRide?.pickup}</span>
+      </div>
+
+      <div className="mt-3 flex justify-between text-sm">
+        <span className="text-slate-500">Destination</span>
+        <span className="font-medium">{currentRide?.destination}</span>
+      </div>
+      <button
+  onClick={() => {
+    localStorage.removeItem("rideflow_current_ride");
+    setRideRequested(false);
+    setRideStatus("REQUESTED");
+    setShowVehicles(false);
+    setPickup("");
+    setDestination("");
+    setSelectedVehicle("CAB");
+  }}
+  className="mt-4 w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700"
+>
+  Book Another Ride
+</button>
+
+      <div className="mt-3 flex justify-between text-sm">
+        <span className="text-slate-500">Vehicle</span>
+        <span className="font-medium">{currentRide?.vehicle}</span>
+      </div>
+    </div>
+  </div>
+)}
           </div>
 
           {/* Right */}
           <div className="relative">
 
             <div className="overflow-hidden rounded-3xl border bg-white shadow-xl">
-
-              <div className="flex h-[480px] items-center justify-center bg-slate-200">
-
-                <div className="text-center">
-
-                  <MapPin
-                    size={48}
-                    className="mx-auto mb-4 text-indigo-600"
-                  />
-
-                  <h3 className="text-xl font-semibold text-slate-800">
-                    RideFlow Map
-                  </h3>
-
-                  <p className="mt-2 max-w-sm px-6 text-sm text-slate-500">
-                    Your interactive map will appear here
-                    when the maps service is connected.
+              <div className="h-[480px]">
+              <RideMap
+                pickup={pickup}
+                destination={destination}
+                onDistanceChange={setDistance}
+              />
+              </div>
+              {distance > 0 && (
+                <div className="mt-4 rounded-xl bg-white p-4 shadow">
+                  <p className="text-sm text-slate-500">
+                    Estimated distance
                   </p>
 
-                  <div className="mt-5 rounded-lg bg-white px-4 py-3 text-sm shadow">
-                    Live ride tracking
-                  </div>
-
-                </div>
-
-              </div>
-
+                  <p className="text-lg font-semibold text-slate-800">
+                    {distance.toFixed(1)} km
+                  </p>
+                 </div>
+                )}
             </div>
+              
+
+            
 
           </div>
 

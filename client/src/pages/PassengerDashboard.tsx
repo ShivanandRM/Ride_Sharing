@@ -8,10 +8,49 @@ import {
   Star,
   Wallet,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getRideHistory } from "../rideStore";
 
 export default function PassengerDashboard() {
   const navigate = useNavigate();
+  const [rideHistory] = useState(getRideHistory());
+  const completedRides = rideHistory.length;
+
+const totalSpent = rideHistory.reduce(
+  (total, ride) => total + ride.fare,
+  0
+);
+
+const [activeRide, setActiveRide] = useState("None");
+
+useEffect(() => {
+  const checkActiveRide = () => {
+    const savedRide = localStorage.getItem("rideflow_current_ride");
+
+    if (savedRide) {
+      const ride = JSON.parse(savedRide);
+
+      if (ride.status === "COMPLETED") {
+        setActiveRide("None");
+      } else if (ride.status === "REQUESTED") {
+        setActiveRide("Requested");
+      } else if (ride.status === "ACCEPTED") {
+        setActiveRide("Accepted");
+      } else if (ride.status === "STARTED") {
+        setActiveRide("In Progress");
+      }
+    } else {
+      setActiveRide("None");
+    }
+  };
+
+  checkActiveRide();
+
+  const interval = setInterval(checkActiveRide, 1000);
+
+  return () => clearInterval(interval);
+}, []);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -68,19 +107,19 @@ export default function PassengerDashboard() {
 
           <StatCard
             title="Active Ride"
-            value="None"
+            value={activeRide}
             icon={<Car size={22} />}
           />
 
           <StatCard
             title="Completed Rides"
-            value="12"
+            value={completedRides.toString()}
             icon={<History size={22} />}
           />
 
           <StatCard
             title="Total Spent"
-            value="₹2,450"
+            value={`₹${Math.round(totalSpent)}`}
             icon={<Wallet size={22} />}
           />
 
@@ -196,29 +235,22 @@ export default function PassengerDashboard() {
 
           <div className="mt-5 divide-y">
 
-            <RideRow
-              from="KSR Railway Station"
-              to="Koramangala"
-              date="Today"
-              fare="₹145"
-              status="Completed"
-            />
-
-            <RideRow
-              from="Indiranagar"
-              to="MG Road"
-              date="Yesterday"
-              fare="₹120"
-              status="Completed"
-            />
-
-            <RideRow
-              from="Whitefield"
-              to="Marathahalli"
-              date="12 Sep"
-              fare="₹185"
-              status="Completed"
-            />
+            {rideHistory.length === 0 ? (
+              <p className="py-6 text-center text-slate-500">
+                No completed rides yet.
+              </p>
+            ) : (
+              rideHistory.map((ride, index) => (
+                <RideRow
+                  key={index}
+                  from={ride.pickup}
+                  to={ride.destination}
+                  date="Completed"
+                  fare={`₹${ride.fare}`}
+                status="Completed"
+              />
+            ))
+          )}
 
           </div>
 
