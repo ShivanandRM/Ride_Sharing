@@ -17,6 +17,7 @@ type VehicleType = "BIKE" | "AUTO" | "CAB" | "PREMIUM_CAB";
 
 function HomePage() {
   const [distance, setDistance] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState<"CASH" | "UPI">("UPI");
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
   const [showVehicles, setShowVehicles] = useState(false);
@@ -302,6 +303,37 @@ function HomePage() {
     </div>
   </div>
 )}
+                <div className="mt-4">
+  <p className="mb-2 text-sm font-medium text-slate-700">
+    Payment Method
+  </p>
+
+  <div className="grid grid-cols-2 gap-3">
+    <button
+      type="button"
+      onClick={() => setPaymentMethod("UPI")}
+      className={`rounded-xl border p-3 font-medium ${
+        paymentMethod === "UPI"
+          ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+          : "border-slate-300"
+      }`}
+    >
+      UPI
+    </button>
+
+    <button
+      type="button"
+      onClick={() => setPaymentMethod("CASH")}
+      className={`rounded-xl border p-3 font-medium ${
+        paymentMethod === "CASH"
+          ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+          : "border-slate-300"
+      }`}
+    >
+      Cash
+    </button>
+  </div>
+</div>
 
                 {/* Trip Summary */}
                 <div className="mt-5 rounded-xl bg-slate-50 p-4">
@@ -359,7 +391,7 @@ function HomePage() {
                     ? 60 + distance * 15
                     : 100 + distance * 20
                     ),
-                    
+                    paymentMethod: paymentMethod,
                   status: "REQUESTED",
                 });
 

@@ -187,6 +187,14 @@ export default function DriverDashboard() {
           <p className="mt-5 text-lg font-bold">
             Fare: ₹{completedRide?.fare}
           </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Payment:{" "}
+            <span className="font-semibold text-slate-700">
+              {completedRide?.paymentMethod === "UPI"
+                ? "UPI"
+                : "Cash"}
+            </span> 
+          </p>
 
         </div>
       </div>
@@ -217,6 +225,14 @@ export default function DriverDashboard() {
 
                         <p className="text-lg font-bold">
                           ₹{currentRide?.fare}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Payment:{" "}
+                          <span className="font-semibold text-slate-700">
+                            {currentRide?.paymentMethod === "UPI"
+                            ? "UPI"
+                            : "Cash"}
+                          </span>
                         </p>
                       </div>
 
@@ -272,20 +288,31 @@ export default function DriverDashboard() {
                     <div className="flex-1">
 
                       <div className="flex items-start justify-between">
-                        <div>
-                          <p className="font-semibold text-green-800">
-                            Ride Accepted
-                          </p>
+  <div>
+    <p className="font-semibold text-green-800">
+      Ride Accepted
+    </p>
 
-                          <p className="mt-1 text-sm text-slate-500">
-                            You can now start the ride.
-                          </p>
-                        </div>
+    <p className="mt-1 text-sm text-slate-500">
+      You can now start the ride.
+    </p>
+  </div>
 
-                        <p className="text-lg font-bold">
-                          ₹{currentRide?.fare}
-                        </p>
-                      </div>
+  <div className="text-right">
+    <p className="text-lg font-bold">
+      ₹{currentRide?.fare}
+    </p>
+
+    <p className="mt-1 text-sm text-slate-500">
+      Payment:{" "}
+      <span className="font-semibold text-slate-700">
+        {currentRide?.paymentMethod === "UPI"
+          ? "UPI"
+          : "Cash"}
+      </span>
+    </p>
+  </div>
+</div>
 
                       <div className="mt-5 space-y-3">
 

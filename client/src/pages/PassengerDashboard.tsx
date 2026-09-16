@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getRideHistory } from "../rideStore";
+import { currentRide, getRideHistory } from "../rideStore";
 
 export default function PassengerDashboard() {
   const navigate = useNavigate();
@@ -130,6 +130,37 @@ useEffect(() => {
           />
 
         </div>
+
+        {activeRide === "Accepted" && currentRide && (
+        <div className="mt-6 rounded-2xl bg-white p-6 shadow">
+          <h3 className="text-lg font-semibold text-slate-800">
+            Driver Information
+          </h3>
+
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Driver</span>
+              <span className="font-medium text-slate-800">
+                {currentRide.driverName}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Rating</span>
+              <span className="font-medium text-slate-800">
+                ⭐ {currentRide.driverRating}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Vehicle Number</span>
+              <span className="font-medium text-slate-800">
+                {currentRide.driverVehicleNumber}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
         {/* Main Grid */}
         <div className="mt-8 grid gap-6 lg:grid-cols-3">

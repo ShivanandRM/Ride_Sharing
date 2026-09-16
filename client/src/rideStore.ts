@@ -9,6 +9,10 @@ export type RideRequest = {
   destination: string;
   vehicle: string;
   fare: number;
+  paymentMethod: "CASH" | "UPI";
+  driverName?: string;
+  driverRating?: number;
+  driverVehicleNumber?: string;
   status: RideStatus;
 };
 
@@ -38,6 +42,11 @@ export const createRide = (ride: RideRequest) => {
 export const updateRideStatus = (status: RideStatus) => {
   if (currentRide) {
     currentRide.status = status;
+    if (status === "ACCEPTED") {
+        currentRide.driverName = "Rahul Kumar";
+        currentRide.driverRating = 4.8;
+        currentRide.driverVehicleNumber = "KA 01 AB 1234";
+    }
 
     localStorage.setItem(
       STORAGE_KEY,
@@ -68,7 +77,15 @@ export const getRideHistory = (): RideRequest[] => {
   const savedHistory =
     localStorage.getItem(HISTORY_KEY);
 
-  return savedHistory
-    ? JSON.parse(savedHistory)
-    : [];
+  if (!savedHistory) {
+    return [];
+  }
+
+  const history: RideRequest[] =
+    JSON.parse(savedHistory);
+
+  return history.map((ride) => ({
+    ...ride,
+    fare: Math.round(ride.fare),
+  }));
 };
