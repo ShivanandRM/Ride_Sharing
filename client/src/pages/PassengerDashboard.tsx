@@ -14,43 +14,87 @@ import { currentRide, getRideHistory } from "../rideStore";
 
 export default function PassengerDashboard() {
   const navigate = useNavigate();
+
   const [rideHistory] = useState(getRideHistory());
   const completedRides = rideHistory.length;
 
-const totalSpent = rideHistory.reduce(
-  (total, ride) => total + ride.fare,
-  0
-);
+  const totalSpent = rideHistory.reduce(
+    (total, ride) => total + ride.fare,
+    0
+  );
 
-const [activeRide, setActiveRide] = useState("None");
+  const [activeRide, setActiveRide] = useState("None");
 
-useEffect(() => {
-  const checkActiveRide = () => {
-    const savedRide = localStorage.getItem("rideflow_current_ride");
+  const [currentLocation, setCurrentLocation] = useState(
+    "Detecting location..."
+  );
 
-    if (savedRide) {
-      const ride = JSON.parse(savedRide);
+  const [destination, setDestination] = useState("");
 
-      if (ride.status === "COMPLETED") {
-        setActiveRide("None");
-      } else if (ride.status === "REQUESTED") {
-        setActiveRide("Requested");
-      } else if (ride.status === "ACCEPTED") {
-        setActiveRide("Accepted");
-      } else if (ride.status === "STARTED") {
-        setActiveRide("In Progress");
-      }
-    } else {
-      setActiveRide("None");
+  // Detect current location
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setCurrentLocation("Location unavailable");
+      return;
     }
-  };
 
-  checkActiveRide();
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
 
-  const interval = setInterval(checkActiveRide, 1000);
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+          );
 
-  return () => clearInterval(interval);
-}, []);
+          const data = await response.json();
+
+          setCurrentLocation(
+            data.display_name || "Current location"
+          );
+        } catch {
+          setCurrentLocation("Current location");
+        }
+      },
+      () => {
+        setCurrentLocation("Location permission denied");
+      }
+    );
+  }, []);
+
+  // Check active ride status
+  useEffect(() => {
+    const checkActiveRide = () => {
+      const savedRide = localStorage.getItem(
+        "rideflow_current_ride"
+      );
+
+      if (savedRide) {
+        const ride = JSON.parse(savedRide);
+
+        if (ride.status === "COMPLETED") {
+          setActiveRide("None");
+        } else if (ride.status === "REQUESTED") {
+          setActiveRide("Requested");
+        } else if (ride.status === "ACCEPTED") {
+          setActiveRide("Accepted");
+        } else if (ride.status === "STARTED") {
+          setActiveRide("In Progress");
+        }
+      } else {
+        setActiveRide("None");
+      }
+    };
+
+    checkActiveRide();
+
+    const interval = setInterval(
+      checkActiveRide,
+      1000
+    );
+
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -70,6 +114,7 @@ useEffect(() => {
           </div>
 
           <div className="flex items-center gap-3">
+
             <div className="hidden text-right sm:block">
               <p className="text-sm font-semibold">
                 Welcome back
@@ -83,6 +128,7 @@ useEffect(() => {
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-600">
               P
             </div>
+
           </div>
 
         </div>
@@ -131,36 +177,49 @@ useEffect(() => {
 
         </div>
 
+        {/* Driver Information */}
         {activeRide === "Accepted" && currentRide && (
-        <div className="mt-6 rounded-2xl bg-white p-6 shadow">
-          <h3 className="text-lg font-semibold text-slate-800">
-            Driver Information
-          </h3>
+          <div className="mt-6 rounded-2xl border bg-white p-6 shadow-sm">
 
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Driver</span>
-              <span className="font-medium text-slate-800">
-                {currentRide.driverName}
-              </span>
-            </div>
+            <h3 className="text-lg font-semibold text-slate-800">
+              Driver Information
+            </h3>
 
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Rating</span>
-              <span className="font-medium text-slate-800">
-                ⭐ {currentRide.driverRating}
-              </span>
-            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-3">
 
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Vehicle Number</span>
-              <span className="font-medium text-slate-800">
-                {currentRide.driverVehicleNumber}
-              </span>
+              <div className="rounded-xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">
+                  Driver
+                </p>
+
+                <p className="mt-1 font-semibold text-slate-800">
+                  {currentRide.driverName}
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">
+                  Rating
+                </p>
+
+                <p className="mt-1 font-semibold text-slate-800">
+                  ⭐ {currentRide.driverRating}
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">
+                  Vehicle Number
+                </p>
+
+                <p className="mt-1 font-semibold text-slate-800">
+                  {currentRide.driverVehicleNumber}
+                </p>
+              </div>
+
             </div>
           </div>
-        </div>
-      )}
+        )}
 
         {/* Main Grid */}
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
@@ -169,6 +228,7 @@ useEffect(() => {
           <div className="rounded-2xl border bg-white p-6 shadow-sm lg:col-span-2">
 
             <div className="flex items-center gap-3">
+
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
                 <MapPin size={22} />
               </div>
@@ -182,36 +242,53 @@ useEffect(() => {
                   Choose your pickup and destination.
                 </p>
               </div>
+
             </div>
 
             {/* Locations */}
             <div className="mt-6 space-y-3">
 
+              {/* Pickup */}
               <div className="rounded-xl border p-4">
-                <p className="text-xs text-slate-500">
-                  Pickup
-                </p>
 
-                <p className="mt-1 font-medium">
-                  Current location
-                </p>
+                <label className="text-xs text-slate-500">
+                  Pickup
+                </label>
+
+                <input
+                  type="text"
+                  value={currentLocation}
+                  readOnly
+                  className="mt-1 w-full bg-transparent font-medium outline-none"
+                />
+
               </div>
 
+              {/* Destination */}
               <div className="rounded-xl border p-4">
-                <p className="text-xs text-slate-500">
-                  Destination
-                </p>
 
-                <p className="mt-1 text-slate-400">
-                  Where do you want to go?
-                </p>
+                <label className="text-xs text-slate-500">
+                  Destination
+                </label>
+
+                <input
+                  type="text"
+                  value={destination}
+                  onChange={(e) =>
+                    setDestination(e.target.value)
+                  }
+                  placeholder="Where do you want to go?"
+                  className="mt-1 w-full bg-transparent outline-none placeholder:text-slate-400"
+                />
+
               </div>
 
             </div>
 
             <button
               onClick={() => navigate("/")}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 font-semibold text-white transition hover:bg-indigo-700"
+              disabled={!destination.trim()}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Car size={19} />
               Book a Ride
@@ -278,10 +355,10 @@ useEffect(() => {
                   to={ride.destination}
                   date="Completed"
                   fare={`₹${ride.fare}`}
-                status="Completed"
-              />
-            ))
-          )}
+                  status="Completed"
+                />
+              ))
+            )}
 
           </div>
 
@@ -326,6 +403,7 @@ useEffect(() => {
   );
 }
 
+
 /* Statistics Card */
 
 function StatCard({
@@ -359,6 +437,7 @@ function StatCard({
     </div>
   );
 }
+
 
 /* Recent Ride */
 
@@ -415,6 +494,7 @@ function RideRow({
     </div>
   );
 }
+
 
 /* Quick Action */
 

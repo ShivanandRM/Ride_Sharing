@@ -8,8 +8,8 @@ import {
   Star,
   Wallet,
 } from "lucide-react";
-import { useState } from "react";
-import { currentRide, updateRideStatus } from "../rideStore";
+import { useEffect, useState } from "react";
+import { createRide, currentRide, updateRideStatus } from "../rideStore";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -17,6 +17,36 @@ export default function DriverDashboard() {
   const [rideStarted, setRideStarted] = useState(false);
   const [rideCompleted, setRideCompleted] = useState(false);
   const [completedRide, setCompletedRide] = useState(currentRide);
+  useEffect(() => {
+  const fetchRides = async () => {
+    try {
+      const response = await fetch(
+        "http://localhost:5000/api/rides"
+      );
+
+      const rides = await response.json();
+
+      const requestedRide = rides.find(
+        (ride: any) => ride.status === "REQUESTED"
+      );
+
+      if (requestedRide) {
+        createRide({
+          pickup: requestedRide.pickup,
+          destination: requestedRide.destination,
+          vehicle: requestedRide.vehicle,
+          fare: requestedRide.fare,
+          paymentMethod: requestedRide.paymentMethod,
+          status: requestedRide.status,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch rides:", error);
+    }
+  };
+
+  fetchRides();
+}, []);
 
   return (
     <div className="min-h-screen bg-slate-100">
