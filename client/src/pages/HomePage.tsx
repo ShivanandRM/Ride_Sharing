@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRide, currentRide } from "../rideStore";
 import RideMap from "../components/RideMap";
-
 import {
   MapPin,
   Search,
@@ -30,65 +29,150 @@ function HomePage() {
   const [selectedVehicle, setSelectedVehicle] =
     useState<VehicleType>("CAB");
 
-  const [rideRequested, setRideRequested] = useState(
-    localStorage.getItem("rideflow_current_ride") !== null
-  );
+  const [rideRequested, setRideRequested] = useState(false);
 
   const [rideStatus, setRideStatus] = useState("REQUESTED");
 
+  /*
+   * Start presentation with a clean active ride.
+   * Completed ride history is NOT removed.
+   */
+  useEffect(() => {
+    const savedRide = localStorage.getItem(
+      "rideflow_current_ride"
+    );
+
+    if (!savedRide) {
+      setRideRequested(false);
+      setRideStatus("REQUESTED");
+    }
+  }, []);
+
+  /*
+   * Watch current ride status.
+   */
   useEffect(() => {
     const checkRideStatus = () => {
       const savedRide = localStorage.getItem(
         "rideflow_current_ride"
       );
 
-      if (savedRide) {
+      if (!savedRide) {
+        return;
+      }
+
+      try {
         const ride = JSON.parse(savedRide);
 
         setRideRequested(true);
         setRideStatus(ride.status);
+      } catch (error) {
+        console.error(
+          "Failed to read current ride:",
+          error
+        );
       }
     };
 
     checkRideStatus();
 
-    const interval = setInterval(checkRideStatus, 1000);
+    const interval = setInterval(
+      checkRideStatus,
+      1000
+    );
 
     return () => clearInterval(interval);
   }, []);
 
+  /*
+   * Start a new booking.
+   */
   const handleBookRide = () => {
-    if (!pickup || !destination) {
-      alert("Please enter pickup and destination.");
+    if (!pickup.trim() || !destination.trim()) {
+      alert(
+        "Please enter pickup and destination."
+      );
       return;
     }
 
-    // Clear previous ride
-    localStorage.removeItem("rideflow_current_ride");
+    // Remove only the active ride.
+    // Ride history remains untouched.
+    localStorage.removeItem(
+      "rideflow_current_ride"
+    );
 
     setRideRequested(false);
     setRideStatus("REQUESTED");
     setShowVehicles(true);
+
+    // Reset distance so the new route is calculated.
+    setDistance(0);
   };
 
-  const calculateFare = (vehicle: VehicleType) => {
-    return Math.round(
-      vehicle === "BIKE"
-        ? 30 + distance * 8
-        : vehicle === "AUTO"
-        ? 40 + distance * 12
-        : vehicle === "CAB"
-        ? 60 + distance * 15
-        : 100 + distance * 20
-    );
+  /*
+   * Calculate fare from actual road distance.
+   */
+  const calculateFare = (
+    vehicle: VehicleType
+  ) => {
+    const actualDistance = Math.max(distance, 0);
+
+    switch (vehicle) {
+      case "BIKE":
+        return Math.round(
+          30 + actualDistance * 8
+        );
+
+      case "AUTO":
+        return Math.round(
+          40 + actualDistance * 12
+        );
+
+      case "CAB":
+        return Math.round(
+          60 + actualDistance * 15
+        );
+
+      case "PREMIUM_CAB":
+        return Math.round(
+          100 + actualDistance * 20
+        );
+
+      default:
+        return 0;
+    }
   };
 
+  /*
+   * Confirm the selected ride.
+   */
   const handleConfirmRide = async () => {
+    if (!pickup.trim() || !destination.trim()) {
+      alert(
+        "Please enter pickup and destination."
+      );
+      return;
+    }
+
+    /*
+     * Do not allow booking before the actual
+     * road distance has been calculated.
+     */
+    if (distance <= 0) {
+      alert(
+        "Please wait for the route and fare to be calculated."
+      );
+      return;
+    }
+
+    const calculatedFare =
+      calculateFare(selectedVehicle);
+
     const ride = {
-      pickup,
-      destination,
+      pickup: pickup.trim(),
+      destination: destination.trim(),
       vehicle: selectedVehicle,
-      fare: calculateFare(selectedVehicle),
+      fare: calculatedFare,
       paymentMethod,
       status: "REQUESTED" as const,
     };
@@ -106,24 +190,43 @@ function HomePage() {
       );
 
       if (!response.ok) {
-        throw new Error("Failed to create ride");
+        throw new Error(
+          "Failed to create ride"
+        );
       }
 
       const data = await response.json();
 
-      console.log("Backend response:", data);
+      console.log(
+        "New Ride Created:",
+        data.ride
+      );
 
-      // Save ride locally so Passenger and Driver dashboards
-      // continue using the existing ride flow.
-      createRide(ride);
+      /*
+       * Save the NEW ride returned by backend.
+       */
+      createRide({
+        pickup: data.ride.pickup,
+        destination: data.ride.destination,
+        vehicle: data.ride.vehicle,
+        fare: data.ride.fare,
+        paymentMethod:
+          data.ride.paymentMethod,
+        status: "REQUESTED",
+      });
 
       setRideRequested(true);
       setRideStatus("REQUESTED");
       setShowVehicles(false);
 
-      alert("Ride request created successfully!");
+      alert(
+        "Ride request created successfully!"
+      );
     } catch (error) {
-      console.error("Backend request failed:", error);
+      console.error(
+        "Backend request failed:",
+        error
+      );
 
       alert(
         "Unable to connect to RideFlow server. Make sure the backend is running."
@@ -259,14 +362,51 @@ function HomePage() {
                   Choose your ride
                 </h3>
 
-                <div className="space-y-3">
+                {/* Route calculation status */}
+                {distance <= 0 ? (
+                  <div className="mb-4 rounded-xl bg-indigo-50 p-4 text-center">
+                    <p className="font-medium text-indigo-700">
+                      Calculating route and fare...
+                    </p>
+
+                    <p className="mt-1 text-sm text-indigo-500">
+                      Please wait for the map to calculate the road distance.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mb-4 rounded-xl bg-green-50 p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-green-700">
+                        Road Distance
+                      </span>
+
+                      <span className="font-bold text-green-800">
+                        {distance.toFixed(2)} km
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className={`space-y-3 ${
+                    distance <= 0
+                      ? "pointer-events-none opacity-50"
+                      : ""
+                  }`}
+                >
                   <VehicleCard
                     type="BIKE"
                     name="Bike"
                     description="Affordable & quick"
-                    price={`₹${calculateFare("BIKE")}`}
+                    price={
+                      distance > 0
+                        ? `₹${calculateFare("BIKE")}`
+                        : "Calculating..."
+                    }
                     icon={<Bike size={24} />}
-                    selected={selectedVehicle === "BIKE"}
+                    selected={
+                      selectedVehicle === "BIKE"
+                    }
                     onClick={() =>
                       setSelectedVehicle("BIKE")
                     }
@@ -276,9 +416,15 @@ function HomePage() {
                     type="AUTO"
                     name="Auto"
                     description="Comfortable everyday ride"
-                    price={`₹${calculateFare("AUTO")}`}
+                    price={
+                      distance > 0
+                        ? `₹${calculateFare("AUTO")}`
+                        : "Calculating..."
+                    }
                     icon={<Car size={24} />}
-                    selected={selectedVehicle === "AUTO"}
+                    selected={
+                      selectedVehicle === "AUTO"
+                    }
                     onClick={() =>
                       setSelectedVehicle("AUTO")
                     }
@@ -288,9 +434,15 @@ function HomePage() {
                     type="CAB"
                     name="Cab"
                     description="Comfortable private ride"
-                    price={`₹${calculateFare("CAB")}`}
+                    price={
+                      distance > 0
+                        ? `₹${calculateFare("CAB")}`
+                        : "Calculating..."
+                    }
                     icon={<Car size={24} />}
-                    selected={selectedVehicle === "CAB"}
+                    selected={
+                      selectedVehicle === "CAB"
+                    }
                     onClick={() =>
                       setSelectedVehicle("CAB")
                     }
@@ -300,13 +452,22 @@ function HomePage() {
                     type="PREMIUM_CAB"
                     name="Premium Cab"
                     description="Premium comfort"
-                    price={`₹${calculateFare("PREMIUM_CAB")}`}
+                    price={
+                      distance > 0
+                        ? `₹${calculateFare(
+                            "PREMIUM_CAB"
+                          )}`
+                        : "Calculating..."
+                    }
                     icon={<Car size={24} />}
                     selected={
-                      selectedVehicle === "PREMIUM_CAB"
+                      selectedVehicle ===
+                      "PREMIUM_CAB"
                     }
                     onClick={() =>
-                      setSelectedVehicle("PREMIUM_CAB")
+                      setSelectedVehicle(
+                        "PREMIUM_CAB"
+                      )
                     }
                   />
                 </div>
@@ -334,7 +495,7 @@ function HomePage() {
                       </span>
 
                       <span className="font-semibold">
-                        {distance.toFixed(1)} km
+                        {distance.toFixed(2)} km
                       </span>
                     </div>
 
@@ -344,7 +505,9 @@ function HomePage() {
                       </span>
 
                       <span className="font-semibold text-indigo-600">
-                        ₹{calculateFare(selectedVehicle)}
+                        ₹{calculateFare(
+                          selectedVehicle
+                        )}
                       </span>
                     </div>
                   </div>
@@ -429,9 +592,16 @@ function HomePage() {
                 {/* Confirm Ride */}
                 <button
                   onClick={handleConfirmRide}
-                  className="mt-5 w-full rounded-xl bg-green-600 py-4 font-semibold text-white hover:bg-green-700"
+                  disabled={distance <= 0}
+                  className={`mt-5 w-full rounded-xl py-4 font-semibold text-white ${
+                    distance > 0
+                      ? "bg-green-600 hover:bg-green-700"
+                      : "cursor-not-allowed bg-slate-400"
+                  }`}
                 >
-                  Confirm Ride
+                  {distance > 0
+                    ? "Confirm Ride"
+                    : "Calculating Fare..."}
                 </button>
               </div>
             )}
@@ -446,30 +616,38 @@ function HomePage() {
 
                   <div>
                     <h3 className="text-lg font-semibold text-green-800">
-                      {rideStatus === "REQUESTED" &&
+                      {rideStatus ===
+                        "REQUESTED" &&
                         "Ride Requested"}
 
-                      {rideStatus === "ACCEPTED" &&
+                      {rideStatus ===
+                        "ACCEPTED" &&
                         "Driver Accepted Your Ride"}
 
-                      {rideStatus === "STARTED" &&
+                      {rideStatus ===
+                        "STARTED" &&
                         "Ride In Progress"}
 
-                      {rideStatus === "COMPLETED" &&
+                      {rideStatus ===
+                        "COMPLETED" &&
                         "Ride Completed"}
                     </h3>
 
                     <p className="mt-1 text-sm text-slate-600">
-                      {rideStatus === "REQUESTED" &&
+                      {rideStatus ===
+                        "REQUESTED" &&
                         "Searching for a nearby driver..."}
 
-                      {rideStatus === "ACCEPTED" &&
+                      {rideStatus ===
+                        "ACCEPTED" &&
                         "Your driver has accepted the ride."}
 
-                      {rideStatus === "STARTED" &&
+                      {rideStatus ===
+                        "STARTED" &&
                         "Your ride is currently in progress."}
 
-                      {rideStatus === "COMPLETED" &&
+                      {rideStatus ===
+                        "COMPLETED" &&
                         "Your ride has been completed successfully."}
                     </p>
                   </div>
@@ -496,6 +674,16 @@ function HomePage() {
                     </span>
                   </div>
 
+                  <div className="mt-3 flex justify-between text-sm">
+                    <span className="text-slate-500">
+                      Vehicle
+                    </span>
+
+                    <span className="font-medium">
+                      {currentRide?.vehicle}
+                    </span>
+                  </div>
+
                   <button
                     onClick={() => {
                       localStorage.removeItem(
@@ -514,16 +702,6 @@ function HomePage() {
                   >
                     Book Another Ride
                   </button>
-
-                  <div className="mt-3 flex justify-between text-sm">
-                    <span className="text-slate-500">
-                      Vehicle
-                    </span>
-
-                    <span className="font-medium">
-                      {currentRide?.vehicle}
-                    </span>
-                  </div>
                 </div>
               </div>
             )}
@@ -547,7 +725,7 @@ function HomePage() {
                   </p>
 
                   <p className="text-lg font-semibold text-slate-800">
-                    {distance.toFixed(1)} km
+                    {distance.toFixed(2)} km
                   </p>
                 </div>
               )}
@@ -612,7 +790,9 @@ function VehicleCard({
       </div>
 
       <div className="flex-1">
-        <p className="font-semibold">{name}</p>
+        <p className="font-semibold">
+          {name}
+        </p>
 
         <p className="text-sm text-slate-500">
           {description}
@@ -620,7 +800,9 @@ function VehicleCard({
       </div>
 
       <div className="text-right">
-        <p className="font-bold">{price}</p>
+        <p className="font-bold">
+          {price}
+        </p>
 
         <div className="flex items-center gap-1 text-xs text-slate-500">
           <Clock size={13} />
@@ -646,7 +828,9 @@ function Feature({
         {icon}
       </div>
 
-      <h3 className="text-lg font-semibold">{title}</h3>
+      <h3 className="text-lg font-semibold">
+        {title}
+      </h3>
 
       <p className="mt-2 leading-6 text-slate-600">
         {description}
