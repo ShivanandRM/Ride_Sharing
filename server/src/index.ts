@@ -20,6 +20,7 @@ type RequestStatus =
   | "ACCEPTED"
   | "REJECTED"
   | "CANCELLED"
+  | "PICKED_UP"
   | "COMPLETED";
 
 type DriverJourney = {
@@ -59,30 +60,30 @@ const passengerRequests: PassengerRequest[] = [];
 let nextJourneyId = 1;
 let nextRequestId = 1;
 
-// -------------------- CONFIGURATION --------------------
-
 const MAX_ROUTE_DEVIATION_KM = 2;
 const MAX_TOTAL_DETOUR_KM = 5;
 const MAX_DEPARTURE_DIFFERENCE_MINUTES = 60;
 
 // -------------------- VALIDATION --------------------
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isValidCoordinates(value: unknown): value is Coordinates {
-  if (!value || typeof value !== "object") {
+  if (!isObject(value)) {
     return false;
   }
 
-  const point = value as Record<string, unknown>;
-
   return (
-    typeof point.lat === "number" &&
-    Number.isFinite(point.lat) &&
-    point.lat >= -90 &&
-    point.lat <= 90 &&
-    typeof point.lon === "number" &&
-    Number.isFinite(point.lon) &&
-    point.lon >= -180 &&
-    point.lon <= 180
+    typeof value.lat === "number" &&
+    Number.isFinite(value.lat) &&
+    value.lat >= -90 &&
+    value.lat <= 90 &&
+    typeof value.lon === "number" &&
+    Number.isFinite(value.lon) &&
+    value.lon >= -180 &&
+    value.lon <= 180
   );
 }
 
@@ -95,6 +96,47 @@ function isValidRoute(value: unknown): value is Coordinates[] {
   );
 }
 
+// Supports both [latitude, longitude] and { lat, lon }.
+function normalizeRouteCoordinates(
+  value: unknown
+): Coordinates[] | null {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 10000) {
+    return null;
+  }
+
+  const normalized: Coordinates[] = [];
+
+  for (const item of value) {
+    let point: unknown = item;
+
+    if (Array.isArray(item)) {
+      if (
+        item.length !== 2 ||
+        typeof item[0] !== "number" ||
+        typeof item[1] !== "number"
+      ) {
+        return null;
+      }
+
+      point = {
+        lat: item[0],
+        lon: item[1],
+      };
+    }
+
+    if (!isValidCoordinates(point)) {
+      return null;
+    }
+
+    normalized.push({
+      lat: point.lat,
+      lon: point.lon,
+    });
+  }
+
+  return normalized;
+}
+
 function isValidDate(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -103,25 +145,31 @@ function isValidDate(value: unknown): value is string {
   );
 }
 
-// -------------------- GEOGRAPHIC UTILITIES --------------------
+function validId(value: string): number | null {
+  const id = Number(value);
+
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+// -------------------- DISTANCE UTILITIES --------------------
 
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
 function haversineDistance(
-  pointA: Coordinates,
-  pointB: Coordinates
+  a: Coordinates,
+  b: Coordinates
 ): number {
   const earthRadiusKm = 6371;
 
-  const lat1 = toRadians(pointA.lat);
-  const lat2 = toRadians(pointB.lat);
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
 
-  const deltaLat = toRadians(pointB.lat - pointA.lat);
-  const deltaLon = toRadians(pointB.lon - pointA.lon);
+  const deltaLat = toRadians(b.lat - a.lat);
+  const deltaLon = toRadians(b.lon - a.lon);
 
-  const a =
+  const h =
     Math.sin(deltaLat / 2) ** 2 +
     Math.cos(lat1) *
       Math.cos(lat2) *
@@ -131,37 +179,27 @@ function haversineDistance(
     2 *
     earthRadiusKm *
     Math.atan2(
-      Math.sqrt(Math.min(1, a)),
-      Math.sqrt(Math.max(0, 1 - a))
+      Math.sqrt(Math.min(1, h)),
+      Math.sqrt(Math.max(0, 1 - h))
     )
   );
 }
 
 function calculateRouteDistances(
-  coordinates: Coordinates[]
+  route: Coordinates[]
 ): number[] {
   const cumulative = [0];
 
-  for (let i = 1; i < coordinates.length; i++) {
+  for (let i = 1; i < route.length; i++) {
     cumulative.push(
       cumulative[i - 1] +
-        haversineDistance(coordinates[i - 1], coordinates[i])
+        haversineDistance(route[i - 1], route[i])
     );
   }
 
   return cumulative;
 }
 
-/*
- * Find the nearest point on every route segment.
- *
- * Returns:
- * - distance from the requested point to the route
- * - distance travelled along the route to the nearest point
- *
- * Local projection is used for each short segment. The result is
- * suitable for baseline matching, not precise navigation.
- */
 function findNearestRoutePosition(
   point: Coordinates,
   route: Coordinates[],
@@ -190,14 +228,13 @@ function findNearestRoutePosition(
 
     const denominator = dx * dx + dy * dy;
 
-    let t = 0;
-
-    if (denominator > 0) {
-      t = Math.max(
-        0,
-        Math.min(1, -(ax * dx + ay * dy) / denominator)
-      );
-    }
+    const t =
+      denominator > 0
+        ? Math.max(
+            0,
+            Math.min(1, -(ax * dx + ay * dy) / denominator)
+          )
+        : 0;
 
     const closestX = ax + t * dx;
     const closestY = ay + t * dy;
@@ -206,14 +243,12 @@ function findNearestRoutePosition(
       closestX * closestX + closestY * closestY
     );
 
-    const segmentDistance =
-      cumulative[i + 1] - cumulative[i];
-
     if (distanceKm < bestDistance) {
       bestDistance = distanceKm;
 
       bestAlongRoute =
-        cumulative[i] + t * segmentDistance;
+        cumulative[i] +
+        t * (cumulative[i + 1] - cumulative[i]);
     }
   }
 
@@ -230,7 +265,7 @@ type RouteMatch = {
   pickupDistanceFromRouteKm: number;
   dropoffDistanceFromRouteKm: number;
   passengerDistanceKm: number;
-  detourKm: number;
+  estimatedDetourKm: number;
   estimatedFare: number;
   departureDifferenceMinutes: number;
   matchScore: number;
@@ -242,7 +277,22 @@ function matchJourney(
   destinationCoordinates: Coordinates,
   requestedDepartureTime?: string
 ): RouteMatch | null {
-  if (journey.status !== "ACTIVE" || journey.availableSeats < 1) {
+  if (
+    journey.status !== "ACTIVE" ||
+    journey.availableSeats < 1 ||
+    !isValidRoute(journey.routeCoordinates)
+  ) {
+    return null;
+  }
+
+  if (
+    !Number.isFinite(journey.farePerKm) ||
+    journey.farePerKm < 0
+  ) {
+    return null;
+  }
+
+  if (!isValidDate(journey.departureTime)) {
     return null;
   }
 
@@ -268,7 +318,6 @@ function matchJourney(
     cumulative
   );
 
-  // Both passenger locations must be close to the driver's route.
   if (
     pickupPosition.distanceKm > MAX_ROUTE_DEVIATION_KM ||
     dropoffPosition.distanceKm > MAX_ROUTE_DEVIATION_KM
@@ -276,9 +325,10 @@ function matchJourney(
     return null;
   }
 
-  // The passenger must travel in the same direction as the driver.
+  // Passenger must board before reaching their drop-off.
   if (
-    dropoffPosition.alongRouteKm <= pickupPosition.alongRouteKm
+    dropoffPosition.alongRouteKm <=
+    pickupPosition.alongRouteKm
   ) {
     return null;
   }
@@ -287,32 +337,26 @@ function matchJourney(
     dropoffPosition.alongRouteKm -
     pickupPosition.alongRouteKm;
 
-  if (passengerDistanceKm <= 0) {
-    return null;
-  }
-
-  /*
-   * Approximate extra distance required to leave the planned route
-   * and serve the passenger's pickup and drop-off points.
-   */
-  const detourKm =
+  // Approximation only; these are straight-line deviations.
+  const estimatedDetourKm =
     pickupPosition.distanceKm + dropoffPosition.distanceKm;
 
-  if (detourKm > MAX_TOTAL_DETOUR_KM) {
+  if (estimatedDetourKm > MAX_TOTAL_DETOUR_KM) {
     return null;
   }
 
   let departureDifferenceMinutes = 0;
 
-  if (requestedDepartureTime) {
+  if (requestedDepartureTime !== undefined) {
     if (!isValidDate(requestedDepartureTime)) {
       return null;
     }
 
-    departureDifferenceMinutes = Math.abs(
-      Date.parse(journey.departureTime) -
-        Date.parse(requestedDepartureTime)
-    ) / 60000;
+    departureDifferenceMinutes =
+      Math.abs(
+        Date.parse(journey.departureTime) -
+          Date.parse(requestedDepartureTime)
+      ) / 60000;
 
     if (
       departureDifferenceMinutes >
@@ -322,19 +366,15 @@ function matchJourney(
     }
   }
 
-  const estimatedFare = Math.max(
-    1,
-    Math.round(passengerDistanceKm * journey.farePerKm)
+  const estimatedFare = Math.round(
+    passengerDistanceKm * journey.farePerKm
   );
 
-  /*
-   * Higher score means a closer route, smaller detour,
-   * and closer departure time.
-   */
   const matchScore =
     100 -
-    (pickupPosition.distanceKm + dropoffPosition.distanceKm) * 10 -
-    detourKm * 5 -
+    (pickupPosition.distanceKm + dropoffPosition.distanceKm) *
+      10 -
+    estimatedDetourKm * 5 -
     departureDifferenceMinutes / 10;
 
   return {
@@ -345,11 +385,13 @@ function matchJourney(
     dropoffDistanceFromRouteKm: Number(
       dropoffPosition.distanceKm.toFixed(2)
     ),
-    passengerDistanceKm: Number(passengerDistanceKm.toFixed(2)),
-    detourKm: Number(detourKm.toFixed(2)),
+    passengerDistanceKm: Number(
+      passengerDistanceKm.toFixed(2)
+    ),
+    estimatedDetourKm: Number(estimatedDetourKm.toFixed(2)),
     estimatedFare,
-    departureDifferenceMinutes: Number(
-      departureDifferenceMinutes.toFixed(0)
+    departureDifferenceMinutes: Math.round(
+      departureDifferenceMinutes
     ),
     matchScore: Number(matchScore.toFixed(2)),
   };
@@ -360,133 +402,171 @@ function matchJourney(
 app.get("/", (_req: Request, res: Response) => {
   res.json({
     message: "RideFlow route-sharing backend is running",
-    features: [
-      "Driver journey publishing",
-      "Geographic route matching",
-      "Intermediate pickup and drop-off",
-      "Passenger requests",
-      "Driver acceptance and rejection",
-      "Seat availability management",
+    endpoints: [
+      "GET /api/health",
+      "POST /api/journeys",
+      "GET /api/journeys",
+      "GET /api/journeys/match",
+      "GET /api/journeys/:id",
+      "PATCH /api/journeys/:id/status",
+      "POST /api/requests",
+      "GET /api/requests",
+      "GET /api/requests/:id",
+      "GET /api/driver/requests",
+      "PATCH /api/requests/:id/cancel",
+      "PATCH /api/requests/:id/respond",
+      "PATCH /api/requests/:id/progress",
     ],
   });
 });
 
-// -------------------- DRIVER: PUBLISH JOURNEY --------------------
-
-app.post(
-  "/api/journeys",
-  (req: Request, res: Response) => {
-    const {
-      driverName,
-      startLocation,
-      destination,
-      departureTime,
-      vehicle,
-      totalSeats,
-      farePerKm,
-      routeCoordinates,
-    } = req.body;
-
-    if (
-      typeof driverName !== "string" ||
-      !driverName.trim() ||
-      typeof startLocation !== "string" ||
-      !startLocation.trim() ||
-      typeof destination !== "string" ||
-      !destination.trim() ||
-      !isValidDate(departureTime) ||
-      typeof vehicle !== "string" ||
-      !vehicle.trim() ||
-      !Number.isInteger(totalSeats) ||
-      totalSeats < 1 ||
-      totalSeats > 20 ||
-      typeof farePerKm !== "number" ||
-      !Number.isFinite(farePerKm) ||
-      farePerKm < 0 ||
-      !isValidRoute(routeCoordinates)
-    ) {
-      return res.status(400).json({
-        message:
-          "Invalid journey. Provide driverName, startLocation, destination, departureTime, vehicle, totalSeats, farePerKm, and at least two route coordinates.",
-      });
-    }
-
-    const journey: DriverJourney = {
-      id: nextJourneyId++,
-      driverName: driverName.trim(),
-      startLocation: startLocation.trim(),
-      destination: destination.trim(),
-      departureTime,
-      vehicle: vehicle.trim(),
-      totalSeats,
-      availableSeats: totalSeats,
-      farePerKm,
-      routeCoordinates,
-      status: "ACTIVE",
-      createdAt: new Date().toISOString(),
-    };
-
-    journeys.push(journey);
-
-    return res.status(201).json({
-      message: "Journey published successfully.",
-      journey,
-    });
-  }
-);
-
-// -------------------- DRIVER: VIEW JOURNEYS --------------------
-
-app.get("/api/journeys", (_req: Request, res: Response) => {
-  res.json(journeys);
+app.get("/api/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok" });
 });
 
-app.get(
-  "/api/journeys/:id",
-  (req: Request, res: Response) => {
-    const journey = journeys.find(
-      (item) => item.id === Number(req.params.id)
+// -------------------- DRIVER: PUBLISH JOURNEY --------------------
+
+app.post("/api/journeys", (req: Request, res: Response) => {
+  const {
+    driverName,
+    startLocation,
+    destination,
+    departureTime,
+    vehicle,
+    totalSeats,
+    farePerKm,
+    routeCoordinates,
+  } = req.body;
+
+  const normalizedRouteCoordinates =
+    normalizeRouteCoordinates(routeCoordinates);
+
+  // Detailed validation diagnostics.
+  const validationErrors: string[] = [];
+
+  if (typeof driverName !== "string" || !driverName.trim()) {
+    validationErrors.push("Invalid driverName");
+  }
+
+  if (
+    typeof startLocation !== "string" ||
+    !startLocation.trim()
+  ) {
+    validationErrors.push("Invalid startLocation");
+  }
+
+  if (
+    typeof destination !== "string" ||
+    !destination.trim()
+  ) {
+    validationErrors.push("Invalid destination");
+  }
+
+  if (!isValidDate(departureTime)) {
+    validationErrors.push("Invalid departureTime format");
+  } else if (Date.parse(departureTime) <= Date.now()) {
+    validationErrors.push("departureTime must be in the future");
+  }
+
+  if (typeof vehicle !== "string" || !vehicle.trim()) {
+    validationErrors.push("Invalid vehicle");
+  }
+
+  if (
+    !Number.isInteger(totalSeats) ||
+    totalSeats < 1 ||
+    totalSeats > 20
+  ) {
+    validationErrors.push("Invalid totalSeats");
+  }
+
+  if (
+    typeof farePerKm !== "number" ||
+    !Number.isFinite(farePerKm) ||
+    farePerKm < 0
+  ) {
+    validationErrors.push("Invalid farePerKm");
+  }
+
+  if (normalizedRouteCoordinates === null) {
+    validationErrors.push("Invalid routeCoordinates");
+  }
+
+  if (validationErrors.length > 0) {
+    console.error(
+      "Journey validation failed:",
+      validationErrors
     );
 
-    if (!journey) {
-      return res.status(404).json({
-        message: "Journey not found.",
-      });
-    }
+    console.error(
+      "Received journey data:",
+      JSON.stringify(req.body, null, 2)
+    );
 
-    return res.json(journey);
+    return res.status(400).json({
+      message: "Journey validation failed.",
+      errors: validationErrors,
+    });
   }
-);
 
-// -------------------- PASSENGER: SEARCH MATCHING ROUTES --------------------
+  // TypeScript can safely use the normalized route after validation.
+  const route = normalizedRouteCoordinates as Coordinates[];
+
+  const journey: DriverJourney = {
+    id: nextJourneyId++,
+    driverName: driverName.trim(),
+    startLocation: startLocation.trim(),
+    destination: destination.trim(),
+    departureTime,
+    vehicle: vehicle.trim(),
+    totalSeats,
+    availableSeats: totalSeats,
+    farePerKm,
+    routeCoordinates: route,
+    status: "ACTIVE",
+    createdAt: new Date().toISOString(),
+  };
+
+  journeys.push(journey);
+
+  return res.status(201).json({
+    message: "Journey published successfully.",
+    journey,
+  });
+});
+
+// -------------------- JOURNEY LIST --------------------
+
+app.get("/api/journeys", (_req: Request, res: Response) => {
+  return res.json(journeys);
+});
+
+// -------------------- PASSENGER: SEARCH ROUTES --------------------
+// IMPORTANT: This route must be declared before "/api/journeys/:id".
 
 app.get(
   "/api/journeys/match",
   (req: Request, res: Response) => {
     const pickup = String(req.query.pickup ?? "").trim();
+
     const destination = String(
       req.query.destination ?? ""
     ).trim();
 
-    const pickupLat = Number(req.query.pickupLat);
-    const pickupLon = Number(req.query.pickupLon);
-    const destinationLat = Number(req.query.destinationLat);
-    const destinationLon = Number(req.query.destinationLon);
-
-    const requestedDepartureTime =
-      req.query.departureTime === undefined
-        ? undefined
-        : String(req.query.departureTime);
-
     const pickupCoordinates = {
-      lat: pickupLat,
-      lon: pickupLon,
+      lat: Number(req.query.pickupLat),
+      lon: Number(req.query.pickupLon),
     };
 
     const destinationCoordinates = {
-      lat: destinationLat,
-      lon: destinationLon,
+      lat: Number(req.query.destinationLat),
+      lon: Number(req.query.destinationLon),
     };
+
+    const departureTime =
+      req.query.departureTime === undefined
+        ? undefined
+        : String(req.query.departureTime);
 
     if (
       !pickup ||
@@ -501,11 +581,11 @@ app.get(
     }
 
     if (
-      requestedDepartureTime !== undefined &&
-      !isValidDate(requestedDepartureTime)
+      departureTime !== undefined &&
+      !isValidDate(departureTime)
     ) {
       return res.status(400).json({
-        message: "Invalid departureTime.",
+        message: "Invalid departure time.",
       });
     }
 
@@ -515,7 +595,7 @@ app.get(
           journey,
           pickupCoordinates,
           destinationCoordinates,
-          requestedDepartureTime
+          departureTime
         )
       )
       .filter((match): match is RouteMatch => match !== null)
@@ -535,7 +615,7 @@ app.get(
         dropoffDistanceFromRouteKm:
           match.dropoffDistanceFromRouteKm,
         passengerDistanceKm: match.passengerDistanceKm,
-        estimatedDetourKm: match.detourKm,
+        estimatedDetourKm: match.estimatedDetourKm,
         estimatedFare: match.estimatedFare,
         departureDifferenceMinutes:
           match.departureDifferenceMinutes,
@@ -549,154 +629,189 @@ app.get(
   }
 );
 
-// -------------------- PASSENGER: REQUEST A SEAT --------------------
+// -------------------- JOURNEY DETAILS --------------------
 
-app.post(
-  "/api/requests",
-  (req: Request, res: Response) => {
-    const {
-      journeyId,
-      passengerName,
-      pickup,
-      destination,
-      pickupCoordinates,
-      destinationCoordinates,
-      seatsRequested,
-      paymentMethod,
-      departureTime,
-    } = req.body;
+app.get("/api/journeys/:id", (req: Request, res: Response) => {
+  const id = validId(String(req.params.id));
 
-    if (
-      !Number.isInteger(journeyId) ||
-      journeyId < 1 ||
-      typeof passengerName !== "string" ||
-      !passengerName.trim() ||
-      typeof pickup !== "string" ||
-      !pickup.trim() ||
-      typeof destination !== "string" ||
-      !destination.trim() ||
-      !isValidCoordinates(pickupCoordinates) ||
-      !isValidCoordinates(destinationCoordinates) ||
-      !Number.isInteger(seatsRequested) ||
-      seatsRequested < 1 ||
-      !["CASH", "UPI"].includes(paymentMethod)
-    ) {
-      return res.status(400).json({
-        message:
-          "Invalid request. Provide journeyId, passengerName, pickup, destination, both coordinate objects, seatsRequested, and paymentMethod.",
-      });
-    }
-
-    const journey = journeys.find(
-      (item) => item.id === journeyId
-    );
-
-    if (!journey || journey.status !== "ACTIVE") {
-      return res.status(404).json({
-        message: "Active driver journey not found.",
-      });
-    }
-
-    if (seatsRequested > journey.availableSeats) {
-      return res.status(409).json({
-        message: "Not enough seats are available.",
-      });
-    }
-
-    const match = matchJourney(
-      journey,
-      pickupCoordinates,
-      destinationCoordinates,
-      departureTime
-    );
-
-    if (!match) {
-      return res.status(400).json({
-        message:
-          "This passenger journey does not match the driver's route, direction, detour, or departure time.",
-      });
-    }
-
-    const request: PassengerRequest = {
-      id: nextRequestId++,
-      journeyId,
-      passengerName: passengerName.trim(),
-      pickup: pickup.trim(),
-      destination: destination.trim(),
-      pickupCoordinates,
-      destinationCoordinates,
-      seatsRequested,
-      estimatedDistanceKm: match.passengerDistanceKm,
-      estimatedFare: match.estimatedFare * seatsRequested,
-      paymentMethod,
-      status: "REQUESTED",
-      createdAt: new Date().toISOString(),
-    };
-
-    passengerRequests.push(request);
-
-    return res.status(201).json({
-      message: "Request sent to the driver for confirmation.",
-      request,
+  if (id === null) {
+    return res.status(400).json({
+      message: "Invalid journey ID.",
     });
   }
-);
 
-// -------------------- DRIVER: VIEW REQUESTS --------------------
+  const journey = journeys.find((item) => item.id === id);
+
+  if (!journey) {
+    return res.status(404).json({
+      message: "Journey not found.",
+    });
+  }
+
+  return res.json(journey);
+});
+
+// -------------------- PASSENGER: REQUEST A SEAT --------------------
+
+app.post("/api/requests", (req: Request, res: Response) => {
+  const {
+    journeyId,
+    passengerName,
+    pickup,
+    destination,
+    pickupCoordinates,
+    destinationCoordinates,
+    seatsRequested,
+    paymentMethod,
+    departureTime,
+  } = req.body;
+
+  if (
+    !Number.isSafeInteger(journeyId) ||
+    journeyId < 1 ||
+    typeof passengerName !== "string" ||
+    !passengerName.trim() ||
+    typeof pickup !== "string" ||
+    !pickup.trim() ||
+    typeof destination !== "string" ||
+    !destination.trim() ||
+    !isValidCoordinates(pickupCoordinates) ||
+    !isValidCoordinates(destinationCoordinates) ||
+    !Number.isInteger(seatsRequested) ||
+    seatsRequested < 1 ||
+    !["CASH", "UPI"].includes(paymentMethod)
+  ) {
+    return res.status(400).json({
+      message: "Invalid passenger request details.",
+    });
+  }
+
+  const journey = journeys.find(
+    (item) => item.id === journeyId
+  );
+
+  if (!journey || journey.status !== "ACTIVE") {
+    return res.status(404).json({
+      message: "Active driver journey not found.",
+    });
+  }
+
+  if (seatsRequested > journey.availableSeats) {
+    return res.status(409).json({
+      message: "Not enough seats are available.",
+    });
+  }
+
+  const match = matchJourney(
+    journey,
+    pickupCoordinates,
+    destinationCoordinates,
+    departureTime
+  );
+
+  if (!match) {
+    return res.status(400).json({
+      message: "The passenger's route does not match this journey.",
+    });
+  }
+
+  const request: PassengerRequest = {
+    id: nextRequestId++,
+    journeyId,
+    passengerName: passengerName.trim(),
+    pickup: pickup.trim(),
+    destination: destination.trim(),
+    pickupCoordinates,
+    destinationCoordinates,
+    seatsRequested,
+    estimatedDistanceKm: match.passengerDistanceKm,
+    estimatedFare: match.estimatedFare * seatsRequested,
+    paymentMethod,
+    status: "REQUESTED",
+    createdAt: new Date().toISOString(),
+  };
+
+  passengerRequests.push(request);
+
+  return res.status(201).json({
+    message: "Seat request sent to the driver.",
+    request,
+  });
+});
+
+// -------------------- REQUEST LISTS --------------------
 
 app.get(
   "/api/driver/requests",
   (req: Request, res: Response) => {
+    const rawJourneyId = req.query.journeyId;
+
     const journeyId =
-      req.query.journeyId === undefined
+      rawJourneyId === undefined
         ? undefined
-        : Number(req.query.journeyId);
+        : Number(rawJourneyId);
 
-    const results = passengerRequests.filter((request) => {
-      const journeyMatches =
-        journeyId === undefined ||
-        request.journeyId === journeyId;
+    if (
+      journeyId !== undefined &&
+      (!Number.isSafeInteger(journeyId) || journeyId < 1)
+    ) {
+      return res.status(400).json({
+        message: "Invalid journey ID.",
+      });
+    }
 
-      return journeyMatches && request.status === "REQUESTED";
-    });
+    const results = passengerRequests.filter(
+      (request) =>
+        (journeyId === undefined ||
+          request.journeyId === journeyId) &&
+        request.status === "REQUESTED"
+    );
 
     return res.json(results);
   }
 );
 
-// -------------------- PASSENGER: VIEW REQUESTS --------------------
+app.get("/api/requests", (_req: Request, res: Response) => {
+  return res.json(passengerRequests);
+});
 
-app.get(
-  "/api/requests",
-  (_req: Request, res: Response) => {
-    res.json(passengerRequests);
+app.get("/api/requests/:id", (req: Request, res: Response) => {
+  const id = validId(String(req.params.id));
+
+  if (id === null) {
+    return res.status(400).json({
+      message: "Invalid request ID.",
+    });
   }
-);
 
-app.get(
-  "/api/requests/:id",
-  (req: Request, res: Response) => {
-    const request = passengerRequests.find(
-      (item) => item.id === Number(req.params.id)
-    );
+  const request = passengerRequests.find(
+    (item) => item.id === id
+  );
 
-    if (!request) {
-      return res.status(404).json({
-        message: "Passenger request not found.",
-      });
-    }
-
-    return res.json(request);
+  if (!request) {
+    return res.status(404).json({
+      message: "Passenger request not found.",
+    });
   }
-);
+
+  return res.json(request);
+});
 
 // -------------------- PASSENGER: CANCEL REQUEST --------------------
 
 app.patch(
   "/api/requests/:id/cancel",
   (req: Request, res: Response) => {
+    const id = validId(String(req.params.id));
+
+    if (id === null) {
+      return res.status(400).json({
+        message: "Invalid request ID.",
+      });
+    }
+
     const request = passengerRequests.find(
-      (item) => item.id === Number(req.params.id)
+      (item) => item.id === id
     );
 
     if (!request || request.status !== "REQUESTED") {
@@ -719,8 +834,14 @@ app.patch(
 app.patch(
   "/api/requests/:id/respond",
   (req: Request, res: Response) => {
-    const requestId = Number(req.params.id);
+    const id = validId(String(req.params.id));
     const action = req.body.action;
+
+    if (id === null) {
+      return res.status(400).json({
+        message: "Invalid request ID.",
+      });
+    }
 
     if (!["ACCEPTED", "REJECTED"].includes(action)) {
       return res.status(400).json({
@@ -729,7 +850,7 @@ app.patch(
     }
 
     const request = passengerRequests.find(
-      (item) => item.id === requestId
+      (item) => item.id === id
     );
 
     if (!request || request.status !== "REQUESTED") {
@@ -778,14 +899,77 @@ app.patch(
   }
 );
 
+// -------------------- DRIVER: PASSENGER PROGRESS --------------------
+
+app.patch(
+  "/api/requests/:id/progress",
+  (req: Request, res: Response) => {
+    const id = validId(String(req.params.id));
+    const { status } = req.body;
+
+    if (id === null) {
+      return res.status(400).json({
+        message: "Invalid request ID.",
+      });
+    }
+
+    if (!["PICKED_UP", "COMPLETED"].includes(status)) {
+      return res.status(400).json({
+        message: "Status must be PICKED_UP or COMPLETED.",
+      });
+    }
+
+    const request = passengerRequests.find(
+      (item) => item.id === id
+    );
+
+    if (!request) {
+      return res.status(404).json({
+        message: "Passenger request not found.",
+      });
+    }
+
+    if (
+      status === "PICKED_UP" &&
+      request.status !== "ACCEPTED"
+    ) {
+      return res.status(409).json({
+        message: "Only accepted passengers can be picked up.",
+      });
+    }
+
+    if (
+      status === "COMPLETED" &&
+      request.status !== "PICKED_UP"
+    ) {
+      return res.status(409).json({
+        message: "Pick up the passenger before completing the trip.",
+      });
+    }
+
+    request.status = status;
+
+    return res.json({
+      message: `Passenger status updated to ${status}.`,
+      request,
+    });
+  }
+);
+
 // -------------------- DRIVER: JOURNEY STATUS --------------------
 
 app.patch(
   "/api/journeys/:id/status",
   (req: Request, res: Response) => {
-    const journey = journeys.find(
-      (item) => item.id === Number(req.params.id)
-    );
+    const id = validId(String(req.params.id));
+
+    if (id === null) {
+      return res.status(400).json({
+        message: "Invalid journey ID.",
+      });
+    }
+
+    const journey = journeys.find((item) => item.id === id);
 
     if (!journey) {
       return res.status(404).json({
@@ -803,7 +987,30 @@ app.patch(
 
     if (journey.status === "COMPLETED") {
       return res.status(409).json({
-        message: "This journey is already completed.",
+        message: "Journey is already completed.",
+      });
+    }
+
+    if (
+      status === "ACTIVE" &&
+      journey.availableSeats === 0
+    ) {
+      return res.status(409).json({
+        message: "Cannot activate a journey with no available seats.",
+      });
+    }
+
+    if (
+      status === "COMPLETED" &&
+      passengerRequests.some(
+        (request) =>
+          request.journeyId === journey.id &&
+          request.status === "PICKED_UP"
+      )
+    ) {
+      return res.status(409).json({
+        message:
+          "A passenger is still marked as onboard. Complete their request first.",
       });
     }
 
@@ -818,10 +1025,6 @@ app.patch(
           request.status = "COMPLETED";
         }
       }
-    } else if (journey.availableSeats === 0) {
-      return res.status(409).json({
-        message: "Cannot reactivate a journey with no available seats.",
-      });
     }
 
     return res.json({
