@@ -11,43 +11,28 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode, type FormEvent } from "react";
+
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+  type FormEvent,
+} from "react";
+
 import { getRideHistory } from "../rideStore";
+import type {
+  Coordinates,
+  JourneyMatch,
+  RideRequest,
+} from "../api";
 
 const API = "http://localhost:5000";
 
-type Coordinates = {
-  lat: number;
-  lon: number;
-};
-
-type Journey = {
-  id: string;
-  driverName: string;
-  startLocation: string;
-  destination: string;
-  departureTime: string;
-  vehicle: string;
-  totalSeats: number;
-  availableSeats: number;
-  farePerKm: number;
-  status: string;
-  estimatedFare?: number;
-  fare?: number;
-};
-
-type RideRequest = {
-  id: string;
-  journeyId: string;
-  passengerName: string;
-  pickup: string;
-  destination: string;
-  seatsRequested: number;
-  paymentMethod: string;
-  status: string;
-};
-
-async function geocodeLocation(query: string) {
+async function geocodeLocation(query: string): Promise<{
+  name: string;
+  coordinates: Coordinates;
+}> {
   const response = await fetch(
     `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`
   );
@@ -67,7 +52,7 @@ async function geocodeLocation(query: string) {
     coordinates: {
       lat: Number(results[0].lat),
       lon: Number(results[0].lon),
-    } as Coordinates,
+    },
   };
 }
 
@@ -85,7 +70,9 @@ function formatDate(value?: string) {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Something went wrong.";
+  return error instanceof Error
+    ? error.message
+    : "Something went wrong.";
 }
 
 export default function PassengerDashboard() {
@@ -106,9 +93,11 @@ export default function PassengerDashboard() {
   const [destination, setDestination] = useState("");
   const [departureTime, setDepartureTime] = useState("");
   const [seatsRequested, setSeatsRequested] = useState(1);
-  const [paymentMethod, setPaymentMethod] = useState("UPI");
 
-  const [matches, setMatches] = useState<Journey[]>([]);
+  const [paymentMethod, setPaymentMethod] =
+    useState<"UPI" | "CASH">("UPI");
+
+  const [matches, setMatches] = useState<JourneyMatch[]>([]);
   const [myRequests, setMyRequests] = useState<RideRequest[]>([]);
 
   const [pickupCoordinates, setPickupCoordinates] =
@@ -127,10 +116,15 @@ export default function PassengerDashboard() {
 
   useEffect(() => {
     localStorage.setItem("rideflow_passenger_name", passengerName);
+  }, [passengerName]);
 
+  // Update the active ride status from local storage.
+  useEffect(() => {
     const checkActiveRide = () => {
       try {
-        const savedRide = localStorage.getItem("rideflow_current_ride");
+        const savedRide = localStorage.getItem(
+          "rideflow_current_ride"
+        );
 
         if (!savedRide) {
           setActiveRide("None");
@@ -138,14 +132,23 @@ export default function PassengerDashboard() {
         }
 
         const ride = JSON.parse(savedRide);
+        const status = String(ride.status ?? "").toUpperCase();
 
-        if (ride.status === "COMPLETED") {
+        if (
+          status === "COMPLETED" ||
+          status === "CANCELLED" ||
+          status === "REJECTED"
+        ) {
           setActiveRide("None");
-        } else if (ride.status === "REQUESTED") {
+        } else if (status === "REQUESTED") {
           setActiveRide("Requested");
-        } else if (ride.status === "ACCEPTED") {
+        } else if (status === "ACCEPTED") {
           setActiveRide("Accepted");
-        } else if (ride.status === "STARTED") {
+        } else if (
+          status === "PICKED_UP" ||
+          status === "STARTED" ||
+          status === "IN_PROGRESS"
+        ) {
           setActiveRide("In Progress");
         } else {
           setActiveRide("None");
@@ -160,8 +163,9 @@ export default function PassengerDashboard() {
     const interval = window.setInterval(checkActiveRide, 2000);
 
     return () => window.clearInterval(interval);
-  }, [passengerName]);
+  }, []);
 
+  // Load requests belonging to the current passenger.
   const loadMyRequests = useCallback(async () => {
     if (!passengerName.trim()) {
       setMyRequests([]);
@@ -185,15 +189,47 @@ export default function PassengerDashboard() {
           ? data.requests
           : [];
 
-      setMyRequests(
-        requests.filter(
-          (request) =>
-            request.passengerName?.trim().toLowerCase() ===
-            passengerName.trim().toLowerCase()
-        )
+      const passengerRequests = requests.filter(
+        (request) =>
+          request.passengerName?.trim().toLowerCase() ===
+          passengerName.trim().toLowerCase()
       );
-    } catch {
-      // The dashboard remains usable if the server is temporarily unavailable.
+
+      setMyRequests(passengerRequests);
+
+      // Synchronize the locally saved ride with the server status.
+      const savedRideText = localStorage.getItem(
+        "rideflow_current_ride"
+      );
+
+      if (savedRideText) {
+        try {
+          const savedRide = JSON.parse(savedRideText);
+
+          const matchingRequest = passengerRequests.find(
+            (request) =>
+              String(request.id) === String(savedRide.id)
+          );
+
+          if (matchingRequest) {
+            localStorage.setItem(
+              "rideflow_current_ride",
+              JSON.stringify({
+                ...savedRide,
+                ...matchingRequest,
+                status: matchingRequest.status,
+              })
+            );
+          }
+        } catch {
+          // Ignore malformed local storage data.
+        }
+      }
+    } catch (err) {
+      console.error(
+        "Unable to refresh passenger requests:",
+        err
+      );
     } finally {
       setLoadingRequests(false);
     }
@@ -209,45 +245,87 @@ export default function PassengerDashboard() {
     return () => window.clearInterval(interval);
   }, [loadMyRequests]);
 
-  const searchJourneys = async (event: FormEvent<HTMLFormElement>) => {
+  // Search for journeys matching the passenger's route.
+  const searchJourneys = async (
+    event: FormEvent<HTMLFormElement>
+  ) => {
     event.preventDefault();
 
     setError("");
     setSuccess("");
     setMatches([]);
+    setPickupCoordinates(null);
+    setDestinationCoordinates(null);
 
-    if (!passengerName.trim() || !pickup.trim() || !destination.trim()) {
-      setError("Enter your name, pickup location, and destination.");
+    if (
+      !passengerName.trim() ||
+      !pickup.trim() ||
+      !destination.trim()
+    ) {
+      setError(
+        "Enter your name, pickup location, and destination."
+      );
       return;
     }
 
-    if (pickup.trim().toLowerCase() === destination.trim().toLowerCase()) {
+    if (
+      pickup.trim().toLowerCase() ===
+      destination.trim().toLowerCase()
+    ) {
       setError("Pickup and destination must be different.");
       return;
+    }
+
+    if (departureTime) {
+      const selectedTime = new Date(departureTime);
+
+      if (Number.isNaN(selectedTime.getTime())) {
+        setError("Please select a valid departure time.");
+        return;
+      }
+
+      if (selectedTime.getTime() < Date.now()) {
+        setError("Departure time cannot be in the past.");
+        return;
+      }
     }
 
     setLoadingMatches(true);
 
     try {
-      const [pickupLocation, destinationLocation] = await Promise.all([
-        geocodeLocation(pickup.trim()),
-        geocodeLocation(destination.trim()),
-      ]);
+      const [pickupLocation, destinationLocation] =
+        await Promise.all([
+          geocodeLocation(pickup.trim()),
+          geocodeLocation(destination.trim()),
+        ]);
 
       setPickupCoordinates(pickupLocation.coordinates);
-      setDestinationCoordinates(destinationLocation.coordinates);
+      setDestinationCoordinates(
+        destinationLocation.coordinates
+      );
 
       const params = new URLSearchParams({
         pickup: pickupLocation.name,
         destination: destinationLocation.name,
-        pickupLat: String(pickupLocation.coordinates.lat),
-        pickupLon: String(pickupLocation.coordinates.lon),
-        destinationLat: String(destinationLocation.coordinates.lat),
-        destinationLon: String(destinationLocation.coordinates.lon),
+        pickupLat: String(
+          pickupLocation.coordinates.lat
+        ),
+        pickupLon: String(
+          pickupLocation.coordinates.lon
+        ),
+        destinationLat: String(
+          destinationLocation.coordinates.lat
+        ),
+        destinationLon: String(
+          destinationLocation.coordinates.lon
+        ),
       });
 
       if (departureTime) {
-        params.set("departureTime", new Date(departureTime).toISOString());
+        params.set(
+          "departureTime",
+          new Date(departureTime).toISOString()
+        );
       }
 
       const response = await fetch(
@@ -258,23 +336,24 @@ export default function PassengerDashboard() {
 
       if (!response.ok) {
         throw new Error(
-          data.message || data.error || "Journey search failed."
+          data.message ||
+            data.error ||
+            "Journey search failed."
         );
       }
 
-      const journeys: Journey[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data.matches)
-          ? data.matches
-          : Array.isArray(data.journeys)
-            ? data.journeys
-            : [];
+      const rawJourneys: JourneyMatch[] =
+        Array.isArray(data)
+          ? data
+          : Array.isArray(data.matches)
+            ? data.matches
+            : Array.isArray(data.journeys)
+              ? data.journeys
+              : [];
 
-      const availableJourneys = journeys.filter(
+      const availableJourneys = rawJourneys.filter(
         (journey) =>
-          journey.status === "ACTIVE" &&
-          (journey.availableSeats ?? journey.totalSeats ?? 0) >=
-            seatsRequested
+          Number(journey.availableSeats) >= seatsRequested
       );
 
       setMatches(availableJourneys);
@@ -291,7 +370,8 @@ export default function PassengerDashboard() {
     }
   };
 
-  const requestSeat = async (journey: Journey) => {
+  // Send a seat request to the backend.
+  const requestSeat = async (journey: JourneyMatch) => {
     setError("");
     setSuccess("");
 
@@ -301,7 +381,25 @@ export default function PassengerDashboard() {
     }
 
     if (!pickupCoordinates || !destinationCoordinates) {
-      setError("Search for journeys again to verify your locations.");
+      setError(
+        "Search for journeys again to verify your locations."
+      );
+      return;
+    }
+
+    const journeyId = Number(journey.journeyId);
+
+    if (!Number.isInteger(journeyId) || journeyId <= 0) {
+      setError(
+        "This journey has an invalid ID. Refresh and search again."
+      );
+      return;
+    }
+
+    if (journey.availableSeats < seatsRequested) {
+      setError(
+        "Not enough seats are available for this journey."
+      );
       return;
     }
 
@@ -314,7 +412,7 @@ export default function PassengerDashboard() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          journeyId: journey.id,
+          journeyId,
           passengerName: passengerName.trim(),
           pickup: pickup.trim(),
           destination: destination.trim(),
@@ -323,7 +421,11 @@ export default function PassengerDashboard() {
           seatsRequested,
           paymentMethod,
           ...(departureTime
-            ? { departureTime: new Date(departureTime).toISOString() }
+            ? {
+                departureTime: new Date(
+                  departureTime
+                ).toISOString(),
+              }
             : {}),
         }),
       });
@@ -332,26 +434,52 @@ export default function PassengerDashboard() {
 
       if (!response.ok) {
         throw new Error(
-          data.message || data.error || "Unable to request this seat."
+          data.message ||
+            data.error ||
+            "Unable to request this seat."
         );
       }
 
       const request: RideRequest = data.request || data;
+
+      if (request.id == null) {
+        throw new Error(
+          "The server did not return a ride request ID."
+        );
+      }
+
+      const requestWithFare = request as RideRequest & {
+        estimatedFare?: number;
+      };
+
+      const savedRide = {
+        ...request,
+        journeyId,
+        passengerName: passengerName.trim(),
+        pickup: pickup.trim(),
+        destination: destination.trim(),
+        vehicle: journey.vehicle,
+        fare:
+          requestWithFare.estimatedFare ??
+          journey.estimatedFare ??
+          0,
+        paymentMethod,
+        status: request.status || "REQUESTED",
+      };
+
+      localStorage.setItem(
+        "rideflow_current_ride",
+        JSON.stringify(savedRide)
+      );
 
       setSuccess(
         "Seat request sent! Wait for the driver to respond."
       );
 
       setMatches((previous) =>
-        previous.filter((item) => item.id !== journey.id)
-      );
-
-      localStorage.setItem(
-        "rideflow_current_ride",
-        JSON.stringify({
-          ...request,
-          status: request.status || "REQUESTED",
-        })
+        previous.filter(
+          (item) => item.journeyId !== journey.journeyId
+        )
       );
 
       await loadMyRequests();
@@ -362,7 +490,8 @@ export default function PassengerDashboard() {
     }
   };
 
-  const cancelRequest = async (requestId: string) => {
+  // Cancel a pending seat request.
+  const cancelRequest = async (requestId: number) => {
     setError("");
     setSuccess("");
 
@@ -375,10 +504,35 @@ export default function PassengerDashboard() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || data.error || "Unable to cancel.");
+        throw new Error(
+          data.message || data.error || "Unable to cancel."
+        );
+      }
+
+      const savedRideText = localStorage.getItem(
+        "rideflow_current_ride"
+      );
+
+      if (savedRideText) {
+        try {
+          const savedRide = JSON.parse(savedRideText);
+
+          if (String(savedRide.id) === String(requestId)) {
+            localStorage.setItem(
+              "rideflow_current_ride",
+              JSON.stringify({
+                ...savedRide,
+                status: "CANCELLED",
+              })
+            );
+          }
+        } catch {
+          // Ignore malformed local storage data.
+        }
       }
 
       setSuccess("Your request has been cancelled.");
+
       await loadMyRequests();
     } catch (err) {
       setError(errorMessage(err));
@@ -395,6 +549,10 @@ export default function PassengerDashboard() {
         return "Rejected";
       case "CANCELLED":
         return "Cancelled";
+      case "PICKED_UP":
+      case "STARTED":
+      case "IN_PROGRESS":
+        return "Ride in progress";
       case "COMPLETED":
         return "Completed";
       default:
@@ -407,9 +565,16 @@ export default function PassengerDashboard() {
       case "ACCEPTED":
       case "COMPLETED":
         return "bg-green-100 text-green-700";
+
       case "REJECTED":
       case "CANCELLED":
         return "bg-red-100 text-red-700";
+
+      case "PICKED_UP":
+      case "STARTED":
+      case "IN_PROGRESS":
+        return "bg-blue-100 text-blue-700";
+
       default:
         return "bg-amber-100 text-amber-700";
     }
@@ -417,18 +582,25 @@ export default function PassengerDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      {/* Header */}
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
           <div>
-            <h1 className="text-2xl font-bold text-indigo-600">RideFlow</h1>
-            <p className="text-xs text-slate-500">Route-based ride sharing</p>
+            <h1 className="text-2xl font-bold text-indigo-600">
+              RideFlow
+            </h1>
+            <p className="text-xs text-slate-500">
+              Route-based ride sharing
+            </p>
           </div>
 
           <div className="text-right">
             <p className="text-sm font-semibold">
               {passengerName || "Passenger"}
             </p>
-            <p className="text-xs text-slate-500">Passenger Dashboard</p>
+            <p className="text-xs text-slate-500">
+              Passenger Dashboard
+            </p>
           </div>
         </div>
       </header>
@@ -439,26 +611,30 @@ export default function PassengerDashboard() {
         </h2>
 
         <p className="mt-2 text-slate-500">
-          Join drivers already traveling in your direction. Request a seat
-          between your pickup and destination.
+          Join drivers already traveling in your direction.
+          Request a seat between your pickup and destination.
         </p>
 
+        {/* Dashboard statistics */}
         <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Active Request"
             value={activeRide}
             icon={<Car size={22} />}
           />
+
           <StatCard
             title="Completed Rides"
             value={String(completedRides)}
             icon={<History size={22} />}
           />
+
           <StatCard
             title="Total Spent"
             value={`₹${Math.round(totalSpent)}`}
             icon={<Wallet size={22} />}
           />
+
           <StatCard
             title="Your Requests"
             value={String(myRequests.length)}
@@ -479,25 +655,34 @@ export default function PassengerDashboard() {
         )}
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
+          {/* Journey search form */}
           <section className="rounded-2xl border bg-white p-6 shadow-sm lg:col-span-2">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
                 <MapPin size={22} />
               </div>
+
               <div>
-                <h3 className="text-xl font-semibold">Find matching journeys</h3>
+                <h3 className="text-xl font-semibold">
+                  Find matching journeys
+                </h3>
                 <p className="text-sm text-slate-500">
-                  Find drivers whose routes pass near your pickup and
-                  destination.
+                  Find drivers whose routes pass near your
+                  pickup and destination.
                 </p>
               </div>
             </div>
 
-            <form onSubmit={searchJourneys} className="mt-6 space-y-4">
+            <form
+              onSubmit={searchJourneys}
+              className="mt-6 space-y-4"
+            >
               <InputField label="Your name">
                 <input
                   value={passengerName}
-                  onChange={(event) => setPassengerName(event.target.value)}
+                  onChange={(event) =>
+                    setPassengerName(event.target.value)
+                  }
                   placeholder="Enter your name"
                   className="input-field"
                   required
@@ -507,7 +692,9 @@ export default function PassengerDashboard() {
               <InputField label="Pickup location">
                 <input
                   value={pickup}
-                  onChange={(event) => setPickup(event.target.value)}
+                  onChange={(event) =>
+                    setPickup(event.target.value)
+                  }
                   placeholder="e.g. RRCE, Kumbalagodu"
                   className="input-field"
                   required
@@ -517,7 +704,9 @@ export default function PassengerDashboard() {
               <InputField label="Destination">
                 <input
                   value={destination}
-                  onChange={(event) => setDestination(event.target.value)}
+                  onChange={(event) =>
+                    setDestination(event.target.value)
+                  }
                   placeholder="e.g. Majestic Bus Station"
                   className="input-field"
                   required
@@ -529,7 +718,9 @@ export default function PassengerDashboard() {
                   <input
                     type="datetime-local"
                     value={departureTime}
-                    onChange={(event) => setDepartureTime(event.target.value)}
+                    onChange={(event) =>
+                      setDepartureTime(event.target.value)
+                    }
                     className="input-field"
                   />
                 </InputField>
@@ -538,7 +729,9 @@ export default function PassengerDashboard() {
                   <select
                     value={seatsRequested}
                     onChange={(event) =>
-                      setSeatsRequested(Number(event.target.value))
+                      setSeatsRequested(
+                        Number(event.target.value)
+                      )
                     }
                     className="input-field"
                   >
@@ -554,7 +747,11 @@ export default function PassengerDashboard() {
               <InputField label="Payment method">
                 <select
                   value={paymentMethod}
-                  onChange={(event) => setPaymentMethod(event.target.value)}
+                  onChange={(event) =>
+                    setPaymentMethod(
+                      event.target.value as "UPI" | "CASH"
+                    )
+                  }
                   className="input-field"
                 >
                   <option value="UPI">UPI</option>
@@ -568,32 +765,47 @@ export default function PassengerDashboard() {
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
               >
                 {loadingMatches ? (
-                  <Loader2 className="animate-spin" size={19} />
+                  <Loader2
+                    className="animate-spin"
+                    size={19}
+                  />
                 ) : (
                   <Search size={19} />
                 )}
-                {loadingMatches ? "Finding journeys..." : "Find matching rides"}
+
+                {loadingMatches
+                  ? "Finding journeys..."
+                  : "Find matching rides"}
               </button>
             </form>
           </section>
 
+          {/* Instructions */}
           <aside className="rounded-2xl border bg-white p-6 shadow-sm">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-50 text-green-600">
               <ShieldCheck size={22} />
             </div>
 
-            <h3 className="mt-4 text-xl font-semibold">How RideFlow works</h3>
+            <h3 className="mt-4 text-xl font-semibold">
+              How RideFlow works
+            </h3>
 
             <div className="mt-5 space-y-4 text-sm text-slate-600">
-              <Step number="1" text="Enter your pickup and destination." />
+              <Step
+                number="1"
+                text="Enter your pickup and destination."
+              />
+
               <Step
                 number="2"
                 text="Find drivers already traveling in your direction."
               />
+
               <Step
                 number="3"
                 text="Request a seat and wait for the driver to respond."
               />
+
               <Step
                 number="4"
                 text="Share the journey and pay using your selected method."
@@ -602,14 +814,18 @@ export default function PassengerDashboard() {
           </aside>
         </div>
 
+        {/* Matching journeys */}
         <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-xl font-semibold">Matching journeys</h3>
+              <h3 className="text-xl font-semibold">
+                Matching journeys
+              </h3>
               <p className="mt-1 text-sm text-slate-500">
                 Drivers whose journeys may suit your route.
               </p>
             </div>
+
             <span className="rounded-full bg-indigo-50 px-3 py-1 text-sm font-medium text-indigo-600">
               {matches.length} found
             </span>
@@ -617,10 +833,15 @@ export default function PassengerDashboard() {
 
           {matches.length === 0 ? (
             <div className="py-12 text-center">
-              <Car className="mx-auto text-slate-300" size={40} />
+              <Car
+                className="mx-auto text-slate-300"
+                size={40}
+              />
+
               <p className="mt-3 font-medium text-slate-700">
                 No journeys to display
               </p>
+
               <p className="mt-1 text-sm text-slate-500">
                 Search for a route to see available drivers.
               </p>
@@ -629,18 +850,20 @@ export default function PassengerDashboard() {
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               {matches.map((journey) => (
                 <article
-                  key={journey.id}
+                  key={journey.journeyId}
                   className="rounded-xl border border-slate-200 p-5"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold text-slate-900">
-                        {journey.driverName || "Driver"}
+                        {journey.driverName}
                       </p>
+
                       <p className="mt-1 text-sm text-slate-500">
-                        {journey.vehicle || "Vehicle not specified"}
+                        {journey.vehicle}
                       </p>
                     </div>
+
                     <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                       Route match
                     </span>
@@ -651,40 +874,58 @@ export default function PassengerDashboard() {
                       label="Driver starts"
                       value={journey.startLocation}
                     />
+
                     <LocationRow
                       label="Driver's destination"
-                      value={journey.destination}
+                      value={journey.journeyDestination}
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
                     <div>
-                      <p className="text-xs text-slate-500">Departure</p>
+                      <p className="text-xs text-slate-500">
+                        Departure
+                      </p>
+
                       <p className="mt-1 text-sm font-medium">
                         {formatDate(journey.departureTime)}
                       </p>
                     </div>
+
                     <div>
-                      <p className="text-xs text-slate-500">Available seats</p>
+                      <p className="text-xs text-slate-500">
+                        Available seats
+                      </p>
+
                       <p className="mt-1 flex items-center gap-1 text-sm font-medium">
                         <Users size={15} />
-                        {journey.availableSeats ?? journey.totalSeats}
+                        {journey.availableSeats}
                       </p>
                     </div>
+
                     <div>
-                      <p className="text-xs text-slate-500">Fare per km</p>
+                      <p className="text-xs text-slate-500">
+                        Passenger distance
+                      </p>
+
                       <p className="mt-1 text-sm font-medium">
-                        ₹{journey.farePerKm ?? "—"}
+                        {Number.isFinite(
+                          journey.passengerDistanceKm
+                        )
+                          ? `${journey.passengerDistanceKm.toFixed(1)} km`
+                          : "—"}
                       </p>
                     </div>
+
                     <div>
-                      <p className="text-xs text-slate-500">Estimated fare</p>
+                      <p className="text-xs text-slate-500">
+                        Estimated fare
+                      </p>
+
                       <p className="mt-1 text-sm font-semibold text-indigo-600">
                         {journey.estimatedFare != null
                           ? `₹${Math.round(journey.estimatedFare)}`
-                          : journey.fare != null
-                            ? `₹${Math.round(journey.fare)}`
-                            : "Shown when confirmed"}
+                          : "Shown when confirmed"}
                       </p>
                     </div>
                   </div>
@@ -694,13 +935,15 @@ export default function PassengerDashboard() {
                     onClick={() => void requestSeat(journey)}
                     disabled={
                       sendingRequest ||
-                      (journey.availableSeats ?? journey.totalSeats ?? 0) <
-                        seatsRequested
+                      journey.availableSeats < seatsRequested
                     }
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
                     <CheckCircle2 size={18} />
-                    {sendingRequest ? "Sending request..." : "Request a seat"}
+
+                    {sendingRequest
+                      ? "Sending request..."
+                      : "Request a seat"}
                   </button>
                 </article>
               ))}
@@ -708,10 +951,14 @@ export default function PassengerDashboard() {
           )}
         </section>
 
+        {/* Passenger requests */}
         <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-xl font-semibold">My ride requests</h3>
+              <h3 className="text-xl font-semibold">
+                My ride requests
+              </h3>
+
               <p className="mt-1 text-sm text-slate-500">
                 Check whether drivers have responded.
               </p>
@@ -725,7 +972,9 @@ export default function PassengerDashboard() {
             >
               <RefreshCw
                 size={15}
-                className={loadingRequests ? "animate-spin" : ""}
+                className={
+                  loadingRequests ? "animate-spin" : ""
+                }
               />
               Refresh
             </button>
@@ -743,12 +992,17 @@ export default function PassengerDashboard() {
                   className="flex flex-wrap items-center justify-between gap-4 rounded-xl border p-4"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="font-medium">{request.pickup}</p>
+                    <p className="font-medium">
+                      {request.pickup}
+                    </p>
+
                     <p className="mt-1 text-sm text-slate-500">
                       To: {request.destination}
                     </p>
+
                     <p className="mt-1 text-xs text-slate-500">
-                      {request.seatsRequested} seat(s) · {request.paymentMethod}
+                      {request.seatsRequested} seat(s) ·{" "}
+                      {request.paymentMethod}
                     </p>
                   </div>
 
@@ -761,10 +1015,13 @@ export default function PassengerDashboard() {
                       {statusLabel(request.status)}
                     </span>
 
-                    {request.status?.toUpperCase() === "REQUESTED" && (
+                    {request.status?.toUpperCase() ===
+                      "REQUESTED" && (
                       <button
                         type="button"
-                        onClick={() => void cancelRequest(request.id)}
+                        onClick={() =>
+                          void cancelRequest(Number(request.id))
+                        }
                         className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
                       >
                         Cancel
@@ -777,11 +1034,19 @@ export default function PassengerDashboard() {
           )}
         </section>
 
+        {/* Payment information */}
         <section className="mt-8 rounded-2xl border bg-white p-6 shadow-sm">
           <div className="flex items-center gap-3">
-            <CreditCard className="text-indigo-600" size={23} />
+            <CreditCard
+              className="text-indigo-600"
+              size={23}
+            />
+
             <div>
-              <h3 className="text-xl font-semibold">Payment options</h3>
+              <h3 className="text-xl font-semibold">
+                Payment options
+              </h3>
+
               <p className="text-sm text-slate-500">
                 Choose UPI or cash when requesting a seat.
               </p>
@@ -806,10 +1071,12 @@ function StatCard({
     <div className="rounded-2xl border bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-500">{title}</p>
+
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
           {icon}
         </div>
       </div>
+
       <p className="mt-4 break-words text-2xl font-bold text-slate-900">
         {value}
       </p>
@@ -829,6 +1096,7 @@ function InputField({
       <label className="mb-1 block text-sm font-medium text-slate-700">
         {label}
       </label>
+
       {children}
     </div>
   );
@@ -843,9 +1111,14 @@ function LocationRow({
 }) {
   return (
     <div className="flex gap-3">
-      <MapPin className="mt-0.5 shrink-0 text-indigo-500" size={17} />
+      <MapPin
+        className="mt-0.5 shrink-0 text-indigo-500"
+        size={17}
+      />
+
       <div className="min-w-0">
         <p className="text-xs text-slate-500">{label}</p>
+
         <p className="break-words text-sm font-medium text-slate-800">
           {value || "Not specified"}
         </p>
@@ -854,12 +1127,19 @@ function LocationRow({
   );
 }
 
-function Step({ number, text }: { number: string; text: string }) {
+function Step({
+  number,
+  text,
+}: {
+  number: string;
+  text: string;
+}) {
   return (
     <div className="flex gap-3">
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 font-semibold text-indigo-600">
         {number}
       </span>
+
       <p>{text}</p>
     </div>
   );
